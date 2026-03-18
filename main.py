@@ -21,35 +21,36 @@ TOKEN_DIR = "./garmin_tokens"
 
 CSV_FITNESS = "fitness_log.csv"
 CSV_HEALTH = "health_log.csv"
-INITIAL_START_DATE = "2025-06-01" # Startdatum für den allerersten Lauf
+INITIAL_SYNC_DAYS = int(os.getenv("INITIAL_SYNC_DAYS", 365)) # How many days to fetch if no file exists
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
-# --- HILFSFUNKTION FÜR DELTA LOAD ---
+# --- HELPER FUNCTION FOR DELTA LOAD ---
 def get_start_date_and_existing_data(filename, key_column):
-    """Liest die CSV, gibt die bestehenden Daten und das Startdatum für das Delta zurück."""
+    """Reads the CSV, returns existing data and the start date for the delta load."""
     existing_data = {}
     max_date_str = None
 
     if os.path.exists(filename):
         with open(filename, mode='r', encoding='utf-8') as file:
             reader = csv.DictReader(file, delimiter='|')
+            
             for row in reader:
                 existing_data[row[key_column]] = row
-                row_date = row['Datum']
+                row_date = row['Date']
                 if not max_date_str or row_date > max_date_str:
                     max_date_str = row_date
 
     if max_date_str:
-        # Wir gehen 2 Tage zurück, um laufende Tage (heute/gestern) zu aktualisieren
-        start_date = date.fromisoformat(max_date_str) - timedelta(days=2)
+        # Start exactly from the last found date to ensure all data for that day is complete
+        start_date = date.fromisoformat(max_date_str)
         return start_date, existing_data
     else:
-        # Datei existiert nicht oder ist leer -> Initial-Load ab 01.06.2025
-        return date.fromisoformat(INITIAL_START_DATE), existing_data
+        # File doesn't exist or is empty -> Initial load starting X days ago
+        return date.today() - timedelta(days=INITIAL_SYNC_DAYS), existing_data
 
 
-# --- TEIL 1: GARMIN LOGIK ---
+# --- PART 1: GARMIN LOGIC ---
 def init_garmin():
     client = Garmin(EMAIL, PASSWORD)
     if os.path.exists(TOKEN_DIR):
@@ -66,18 +67,19 @@ def init_garmin():
         client.garth.dump(TOKEN_DIR)
         return client
     except Exception as e:
-        print(f"❌ Garmin Login fehlgeschlagen: {e}")
+        print(f"❌ Garmin Login failed: {e}")
         return None
 
 def fetch_and_save_activities(client):
-    print("\n🚴 Prüfe Fitness-Daten (Delta Load)...")
+    print("\n🚴 Checking fitness data (Delta Load)...")
     start_date, existing_fitness = get_start_date_and_existing_data(CSV_FITNESS, 'Activity_ID')
     today = date.today()
     
-    print(f"Lade Aktivitäten vom {start_date.isoformat()} bis {today.isoformat()}...")
+    print(f"📊 Delta check: {len(existing_fitness)} existing activities found in CSV.")
+    print(f"📅 Syncing new activities from {start_date.isoformat()} until today ({today.isoformat()})...")
     
     try:
-        # Holt alle Aktivitäten im Zeitraum
+        # Fetch all activities in range
         activities = client.get_activities_by_date(start_date.isoformat(), today.isoformat())
         
         new_count = 0
@@ -89,26 +91,26 @@ def fetch_and_save_activities(client):
             
             row = {
                 'Activity_ID': activity_id,
-                'Datum': activity.get('startTimeLocal', '')[:10],
-                'Typ': activity.get('activityType', {}).get('typeKey', 'Unbekannt'),
-                'Distanz_km': str(round(distance_km, 2)).replace('.', ','),
-                'Dauer_min': str(round(duration_min, 1)).replace('.', ','),
+                'Date': activity.get('startTimeLocal', '')[:10],
+                'Type': activity.get('activityType', {}).get('typeKey', 'Unknown'),
+                'Distance_km': str(round(distance_km, 2)).replace('.', ','),
+                'Duration_min': str(round(duration_min, 1)).replace('.', ','),
                 'Avg_Speed_kmh': str(round(speed_kmh, 1)).replace('.', ','),
-                'Avg_Puls': activity.get('averageHR', 'N/A'),
-                'Max_Puls': activity.get('maxHR', 'N/A'),
-                'Kalorien': activity.get('calories', 0),
-                'Hoehenmeter': str(round(activity.get('elevationGain', 0), 0)).replace('.', ',') if activity.get('elevationGain') else "0"
+                'Avg_HR': activity.get('averageHR', 'N/A'),
+                'Max_HR': activity.get('maxHR', 'N/A'),
+                'Calories': activity.get('calories', 0),
+                'Elevation_Gain': str(round(activity.get('elevationGain', 0), 0)).replace('.', ',') if activity.get('elevationGain') else "0"
             }
             
-            # Wenn ID neu ist, zählen wir mit
+            # Count if ID is new
             if activity_id not in existing_fitness:
                 new_count += 1
                 
-            # Dictionary aktualisieren (überschreibt alte Werte, fügt neue hinzu)
+            # Update dictionary (overwrites old values, adds new ones)
             existing_fitness[activity_id] = row
             
-        # Daten chronologisch sortieren
-        sorted_data = sorted(existing_fitness.values(), key=lambda x: x['Datum'])
+        # Sort data chronologically
+        sorted_data = sorted(existing_fitness.values(), key=lambda x: x['Date'])
         
         if sorted_data:
             with open(CSV_FITNESS, mode='w', newline='', encoding='utf-8') as file:
@@ -116,25 +118,27 @@ def fetch_and_save_activities(client):
                 writer.writeheader()
                 writer.writerows(sorted_data)
                 
-        print(f"✅ Fitness-Daten gesichert! ({new_count} neue/aktualisierte Aktivitäten gefunden)")
+        print(f"✅ Fitness data secured! ({new_count} new/updated activities found)")
         return True
     except Exception as e:
-        print(f"❌ Fehler bei Fitness-Daten: {e}")
+        print(f"❌ Error with fitness data: {e}")
         return False
 
 def fetch_and_save_health(client):
-    print("\n💤 Prüfe Health-Daten (Delta Load)...")
-    start_date, existing_health = get_start_date_and_existing_data(CSV_HEALTH, 'Datum')
+    print("\n💤 Checking health data (Delta Load)...")
+    start_date, existing_health = get_start_date_and_existing_data(CSV_HEALTH, 'Date')
     today = date.today()
     
     current_date = start_date
     days_to_fetch = (today - start_date).days + 1
     
-    print(f"Lade Health-Daten für {days_to_fetch} Tage (ab {start_date.isoformat()})...")
+    print(f"📊 Delta check: {len(existing_health)} days of health data already stored.")
+    print(f"📅 Fetching missing health data for {days_to_fetch} days (from {start_date.isoformat()} to {today.isoformat()})...")
     
-    # Kleine Verzögerung bei riesigem Initial-Load, damit Garmin uns nicht blockt
+    # Small delay for large initial loads to avoid being blocked by Garmin
     delay = 0.5 if days_to_fetch > 30 else 0 
 
+    success_count = 0
     while current_date <= today:
         target_date = current_date.isoformat()
         try:
@@ -166,27 +170,28 @@ def fetch_and_save_health(client):
                     sleep_score = score_data.get('value', 'N/A') if isinstance(score_data, dict) else score_data
 
             row = {
-                'Datum': target_date,
-                'Ruhepuls': stats.get('restingHeartRate', 'N/A'),
+                'Date': target_date,
+                'Resting_HR': stats.get('restingHeartRate', 'N/A'),
                 'Avg_HRV': hrv_avg,
                 'Avg_Stress': stats.get('averageStressLevel', 'N/A'),
-                'Schlaf_Stunden': str(sleep_hours).replace('.', ','),
-                'Schlaf_Score': sleep_score,
-                'Schritte': stats.get('totalSteps', 0)
+                'Sleep_Hours': str(sleep_hours).replace('.', ','),
+                'Sleep_Score': sleep_score,
+                'Steps': stats.get('totalSteps', 0)
             }
             
             existing_health[target_date] = row
+            success_count += 1
             
-            # Anti-Blockade-Pause für Garmin
+            # Anti-blocking delay
             if delay > 0:
                 time.sleep(delay)
                 
         except Exception as e:
-            print(f"⚠️ Fehler für {target_date}: {e}")
+            print(f"⚠️ Error for {target_date}: {e}")
             
         current_date += timedelta(days=1)
         
-    sorted_data = sorted(existing_health.values(), key=lambda x: x['Datum'])
+    sorted_data = sorted(existing_health.values(), key=lambda x: x['Date'])
     
     try:
         if sorted_data:
@@ -194,10 +199,10 @@ def fetch_and_save_health(client):
                 writer = csv.DictWriter(file, fieldnames=sorted_data[0].keys(), delimiter='|')
                 writer.writeheader()
                 writer.writerows(sorted_data)
-        print("✅ Health-Daten gesichert!")
+        print(f"✅ Health data secured! ({success_count} entries processed)")
         return True
     except Exception as e:
-        print(f"❌ Fehler beim Speichern: {e}")
+        print(f"❌ Error saving: {e}")
         return False
 
 # --- TEIL 2: GOOGLE DRIVE LOGIK ---
@@ -217,7 +222,7 @@ def get_drive_service():
         
         if not creds:
             if not os.path.exists('credentials.json'):
-                print("❌ 'credentials.json' nicht gefunden! Bitte von Google Cloud Console herunterladen.")
+                print("❌ 'credentials.json' not found! Please download it from the Google Cloud Console.")
                 return None
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
             creds = flow.run_local_server(port=0)
@@ -240,40 +245,40 @@ def upload_to_drive(filename):
         
         if not files:
             file_metadata = {'name': filename}
-            print(f"☁️ Lade neue Datei '{filename}' hoch...")
+            print(f"☁️ Uploading new file '{filename}'...")
             service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         else:
             file_id = files[0].get('id')
-            print(f"☁️ Aktualisiere Datei '{filename}'...")
+            print(f"☁️ Updating file '{filename}'...")
             service.files().update(fileId=file_id, media_body=media).execute()
     except Exception as e:
-        print(f"❌ Fehler beim Upload von {filename}: {e}")
+        print(f"❌ Error uploading {filename}: {e}")
 
-# --- HAUPTPROGRAMM ---
+# --- MAIN PROGRAM ---
 def job():
-    """Diese Funktion wird alle 2 Stunden ausgeführt."""
-    print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] ⏰ Starte geplanten Daten-Sync...")
+    """This function runs every 2 hours."""
+    print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] ⏰ Starting scheduled data sync...")
     client = init_garmin()
     if client:
         fitness_success = fetch_and_save_activities(client)
         health_success = fetch_and_save_health(client)
         
-        print("\n🚀 Starte Cloud-Upload...")
+        print("\n🚀 Starting cloud upload...")
         if fitness_success: upload_to_drive(CSV_FITNESS)
         if health_success: upload_to_drive(CSV_HEALTH)
-        print("🎉 Alle Systeme aktuell!")
+        print("🎉 All systems up to date!")
 
 if __name__ == "__main__":
-    print("🚀 Garmin AI Coach Container gestartet!")
+    print("🚀 Garmin AI Coach Container started!")
     
-    # 1. Einmal sofort ausführen beim Start des Containers
+    # 1. Run once immediately on container start
     job()
     
-    # 2. Den Zeitplan festlegen (alle 2 Stunden)
+    # 2. Set schedule (every 2 hours)
     schedule.every(2).hours.do(job)
-    print("\n⏳ Zeitschaltuhr aktiv. Warte auf den nächsten Zyklus (in 2 Stunden)...")
+    print("\n⏳ Scheduler active. Waiting for next cycle (in 2 hours)...")
     
-    # 3. Die Endlosschleife, die den Container am Leben hält
+    # 3. Main loop to keep container alive
     while True:
         schedule.run_pending()
-        time.sleep(60) # Prüft jede Minute, ob es Zeit für einen neuen Lauf ist
+        time.sleep(60) # Check every minute if it's time to run again

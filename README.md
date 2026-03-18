@@ -1,52 +1,84 @@
 # ⌚ Garmin-to-Drive Sync (Garmin Connector)
 
-Dieses Tool automatisiert den Export deiner Garmin-Fitness- und Gesundheitsdaten in CSV-Dateien und synchronisiert diese direkt mit deinem Google Drive. Es dient als Datenbasis für Analysen, Dashboards oder KI-gestützte Coaching-Systeme.
+This tool automates the export of your Garmin fitness and health data into CSV files and synchronizes them directly with your Google Drive. It serves as a data foundation for analyses, dashboards, or AI-powered coaching systems.
 
 ## 🚀 Features
 
-- **Delta Load:** Lädt nur neue Daten seit dem letzten Lauf (effizient und schnell).
-- **Vollständige Synchronisation:**
-    - **Fitness:** Aktivitäten (ID, Datum, Typ, Distanz, Dauer, Geschwindigkeit, Puls, Kalorien, Höhenmeter).
-    - **Health:** Tägliche Statistiken (Ruhepuls, HRV, Stresslevel, Schlafstunden, Schlaf-Score, Schritte).
-- **Cloud-Anbindung:** Automatischer Upload und Aktualisierung der Dateien in Google Drive.
-- **Automatisierung:** Läuft standardmäßig alle 2 Stunden als Hintergrundprozess.
-- **Docker-Ready:** Einfache Bereitstellung über Docker und Docker-Compose.
+- **Delta Load:** Only fetches new data since the last run (efficient and fast).
+- **Full Synchronization:**
+    - **Fitness:** Activities (ID, Date, Type, Distance, Duration, Speed, Heart Rate, Calories, Elevation).
+    - **Health:** Daily statistics (Resting HR, HRV, Stress level, Sleep hours, Sleep score, Steps).
+- **Cloud Connectivity:** Automatic upload and update of files in Google Drive.
+- **Automation:** Runs by default every 2 hours as a background process.
+- **Docker-Ready:** Easy deployment via Docker and Docker Compose.
 
 ## 🛠 Setup
 
-### 1. Voraussetzungen
-- Ein Garmin-Konto.
-- Ein Google Cloud Projekt mit aktivierter Drive API (für `credentials.json`).
+### 1. Prerequisites
+- A Garmin account.
+- A Google Cloud project with the Drive API enabled (to get `credentials.json`).
 
-### 2. Konfiguration
-Erstelle eine `.env` Datei im Hauptverzeichnis (siehe `.env.example`):
+### 2. Configuration
+Create a `.env` file in the root directory (see `.env.example`):
 ```env
-GARMIN_EMAIL=deine.email@gmail.com
-GARMIN_PASSWORD=dein_passwort
+GARMIN_EMAIL=your.email@gmail.com
+GARMIN_PASSWORD=your_password
+INITIAL_SYNC_DAYS=90
 ```
+`INITIAL_SYNC_DAYS` defines how many days of history should be fetched during the very first run (if no CSV files exist).
 
 ### 3. Google Drive API
-Platziere deine `credentials.json` aus der Google Cloud Console im Hauptverzeichnis. Beim ersten Start wird ein Browserfenster für die Authentifizierung geöffnet, um die `token.json` zu generieren.
+Place your `credentials.json` from the Google Cloud Console in the root directory. On the first run, a browser window will open for authentication to generate the `token.json`.
 
-### 4. Start mit Docker
-Der einfachste Weg ist die Nutzung von Docker Compose:
+### 4. Start with Docker
+The easiest way is using Docker Compose:
 
 ```bash
 docker-compose up -d
 ```
 
-Der Container bleibt im Hintergrund aktiv und führt den Sync alle 2 Stunden aus.
+The container stays active in the background and performs the sync every 2 hours.
 
-## 📂 Dateistruktur
+## 📂 File Structure & CSV Reference
 
-- `main.py`: Die Hauptlogik für Garmin-API und Google Drive Upload.
-- `fitness_log.csv`: Gesammelte Aktivitätsdaten (Pipe-getrennt `|`).
-- `health_log.csv`: Gesammelte Gesundheitsdaten (Pipe-getrennt `|`).
-- `garmin_tokens/`: Speichert Session-Tokens für Garmin (vermeidet ständige Logins).
-- `token.json`: Google OAuth Refresh-Token.
+- `main.py`: Main logic for Garmin API and Google Drive upload.
+- `garmin_tokens/`: Stores session tokens for Garmin (prevents constant logins).
+- `token.json`: Google OAuth refresh token.
 
-## 🔒 Sicherheit
-Sensible Daten wie Passwörter, Tokens und deine persönlichen CSV-Logs sind in der `.gitignore` und `.dockerignore` hinterlegt, damit sie nicht versehentlich geteilt werden.
+### 📋 CSV Data Format
+All CSV files use a pipe `|` as a delimiter and commas `,` for decimal values to ensure compatibility with various analysis tools.
+
+#### `fitness_log.csv` (Activities)
+| Column | Description |
+| :--- | :--- |
+| **Activity_ID** | Unique identifier from Garmin for the activity. |
+| **Date** | Date of the activity (YYYY-MM-DD). |
+| **Type** | Type of activity (e.g., `running`, `cycling`, `walking`). |
+| **Distance_km** | Total distance covered in kilometers. |
+| **Duration_min** | Total duration of the activity in minutes. |
+| **Avg_Speed_kmh** | Average speed during the activity (km/h). |
+| **Avg_HR** | Average heart rate during the activity. |
+| **Max_HR** | Maximum heart rate reached. |
+| **Calories** | Total calories burned. |
+| **Elevation_Gain** | Total elevation gain in meters. |
+
+#### `health_log.csv` (Daily Metrics)
+| Column | Description |
+| :--- | :--- |
+| **Date** | The specific day (YYYY-MM-DD). |
+| **Resting_HR** | Resting heart rate for that day. |
+| **Avg_HRV** | Average Heart Rate Variability (HRV) during the night. |
+| **Avg_Stress** | Average stress level (0-100). |
+| **Sleep_Hours** | Total duration of sleep in hours. |
+| **Sleep_Score** | Garmin Sleep Score (0-100). |
+| **Steps** | Total step count for the day. |
+
+## ⚙️ Technical Notes
+
+- **API Security Delay:** To prevent being rate-limited or blocked by the Garmin API, especially during the initial sync (more than 30 days), a "Security Delay" is automatically applied. The script waits briefly between daily health data requests to ensure a stable and safe data transfer.
+
+## 🔒 Security
+Sensitive data such as passwords, tokens, and your personal CSV logs are listed in `.gitignore` and `.dockerignore` to prevent accidental sharing.
 
 ---
-*Hinweis: Dieses Tool ist für den privaten Gebrauch gedacht. Bitte achte auf die Nutzungsbedingungen der jeweiligen API-Anbieter.*
+*Note: This tool is intended for private use. Please respect the terms of service of the respective API providers.*
