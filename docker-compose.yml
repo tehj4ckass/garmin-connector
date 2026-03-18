@@ -1,0 +1,10 @@
+services:
+  garmin-connector:
+    build: .
+    container_name: garmin-connector
+    restart: unless-stopped
+    volumes:
+      # Hiermit verknüpfen wir den Ordner auf dem Pi (links) 
+      # mit dem Arbeitsordner im Container (rechts). 
+      # So bleiben CSVs und Tokens auch nach einem Neustart erhalten!
+      - .:/app

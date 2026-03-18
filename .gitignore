@@ -1,0 +1,12 @@
+.env
+venv/
+garmin_tokens/
+credentials.json
+token.json
+fitness_log.csv
+health_log.csv
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.pytest_cache/
