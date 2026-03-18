@@ -1,6 +1,6 @@
 # ⌚ Garmin-to-Drive Sync (Garmin Connector)
 
-This tool automates the export of your Garmin fitness and health data into CSV files and synchronizes them directly with your Google Drive. It serves as a data foundation for analyses, dashboards, or AI-powered coaching systems.
+This tool automates the export of your Garmin fitness and health data into CSV files and synchronizes them directly with your Google Drive. It is specifically designed to provide a structured, long-term data foundation that can be easily integrated into **AI-powered coaching systems**, custom dashboards, or personal health analytics.
 
 ## 🚀 Features
 

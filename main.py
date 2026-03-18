@@ -13,7 +13,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# --- KONFIGURATION ---
+# --- CONFIGURATION ---
 load_dotenv()
 EMAIL = os.getenv("GARMIN_EMAIL")
 PASSWORD = os.getenv("GARMIN_PASSWORD")
@@ -205,19 +205,19 @@ def fetch_and_save_health(client):
         print(f"❌ Error saving: {e}")
         return False
 
-# --- TEIL 2: GOOGLE DRIVE LOGIK ---
+# --- PART 2: GOOGLE DRIVE LOGIC ---
 def get_drive_service():
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
     
-    # Wenn keine gültigen Anmeldedaten vorliegen, lassen wir den Nutzer sich anmelden.
+    # If no valid credentials exist, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
             except Exception:
-                # Refresh fehlgeschlagen (z.B. Revoked)
+                # Refresh failed (e.g. revoked)
                 creds = None
         
         if not creds:
@@ -227,7 +227,7 @@ def get_drive_service():
             flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
             creds = flow.run_local_server(port=0)
             
-        # Speichere die neuen Tokens für das nächste Mal
+        # Save credentials for the next run
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
             
@@ -257,16 +257,31 @@ def upload_to_drive(filename):
 # --- MAIN PROGRAM ---
 def job():
     """This function runs every 2 hours."""
+    # Check night mode (22:00 - 06:00)
+    current_hour = time.localtime().tm_hour
+    if 22 <= current_hour or current_hour < 6:
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 💤 Night mode (22:00-06:00). Sync skipped.")
+        return
+
     print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] ⏰ Starting scheduled data sync...")
-    client = init_garmin()
-    if client:
-        fitness_success = fetch_and_save_activities(client)
-        health_success = fetch_and_save_health(client)
-        
-        print("\n🚀 Starting cloud upload...")
-        if fitness_success: upload_to_drive(CSV_FITNESS)
-        if health_success: upload_to_drive(CSV_HEALTH)
-        print("🎉 All systems up to date!")
+    try:
+        client = init_garmin()
+        if client:
+            fitness_success = fetch_and_save_activities(client)
+            health_success = fetch_and_save_health(client)
+            
+            print("\n🚀 Starting cloud upload...")
+            if fitness_success: upload_to_drive(CSV_FITNESS)
+            if health_success: upload_to_drive(CSV_HEALTH)
+            print("🎉 All systems up to date!")
+            
+            # Calculate next run (current time + 2 hours)
+            next_run_time = time.strftime('%H:%M:%S', time.localtime(time.time() + 7200))
+            print(f"🕒 Next sync scheduled for approx. {next_run_time} (if not in night mode).")
+        else:
+            print("❌ Sync failed: Garmin login failed.")
+    except Exception as e:
+        print(f"❌ Unexpected error in job: {e}")
 
 if __name__ == "__main__":
     print("🚀 Garmin AI Coach Container started!")
@@ -276,9 +291,9 @@ if __name__ == "__main__":
     
     # 2. Set schedule (every 2 hours)
     schedule.every(2).hours.do(job)
-    print("\n⏳ Scheduler active. Waiting for next cycle (in 2 hours)...")
+    print("\n⏳ Scheduler active. Waiting for next cycle (in 2 hours, skipping 22:00-06:00)...")
     
     # 3. Main loop to keep container alive
     while True:
         schedule.run_pending()
-        time.sleep(60) # Check every minute if it's time to run again
+        time.sleep(30) # Check every 30 seconds if it's time to run again
