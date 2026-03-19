@@ -239,18 +239,53 @@ def upload_to_drive(filename):
         if not service:
             return
 
-        response = service.files().list(q=f"name='{filename}'", spaces='drive', fields='files(id, name)').execute()
+        if not os.path.exists(filename):
+            print(f"❌ Local file not found for upload: '{filename}'")
+            return
+
+        abs_path = os.path.abspath(filename)
+        local_size = os.path.getsize(abs_path)
+        media = MediaFileUpload(abs_path, mimetype='text/csv', resumable=False)
+
+        # Crucial: only update the "real" file in Drive root, never a trashed one.
+        # Otherwise the code can update an item in the Papierkorb and leave Root unchanged.
+        q_root = f"name='{filename}' and trashed=false and 'root' in parents"
+        response = service.files().list(
+            q=q_root,
+            spaces='drive',
+            fields='files(id, name, trashed, parents)'
+        ).execute()
         files = response.get('files', [])
-        media = MediaFileUpload(filename, mimetype='text/csv')
-        
+
         if not files:
-            file_metadata = {'name': filename}
-            print(f"☁️ Uploading new file '{filename}'...")
-            service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            # Diagnostic: log whether we are hitting trashed duplicates.
+            q_trash = f"name='{filename}' and trashed=true"
+            trash_resp = service.files().list(
+                q=q_trash,
+                spaces='drive',
+                fields='files(id, name)'
+            ).execute()
+            trashed_files = trash_resp.get('files', [])
+            if trashed_files:
+                print(f"☁️ Found {len(trashed_files)} trashed Drive file(s) for '{filename}' (will not update them).")
+
+            file_metadata = {'name': filename, 'parents': ['root']}
+            print(f"☁️ Uploading new file '{filename}' to Drive root... (local {local_size} bytes)")
+            created = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id, name, webViewLink'
+            ).execute()
+            print(f"☁️ Created: id={created.get('id')} link={created.get('webViewLink')}")
         else:
             file_id = files[0].get('id')
-            print(f"☁️ Updating file '{filename}'...")
-            service.files().update(fileId=file_id, media_body=media).execute()
+            print(f"☁️ Updating file '{filename}' in Drive root... (id={file_id})")
+            updated = service.files().update(
+                fileId=file_id,
+                media_body=media,
+                fields='id, name, webViewLink'
+            ).execute()
+            print(f"☁️ Updated: id={updated.get('id')} link={updated.get('webViewLink')}")
     except Exception as e:
         print(f"❌ Error uploading {filename}: {e}")
 
