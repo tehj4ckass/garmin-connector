@@ -2,6 +2,7 @@ import os
 import csv
 import time
 import random
+import sys
 import schedule
 from datetime import date, timedelta
 from dotenv import load_dotenv
@@ -13,6 +14,15 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+
+# Ensure Unicode output works across Windows terminals (prevents crashes on emoji prints)
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 # --- CONFIGURATION ---
 load_dotenv()
@@ -68,12 +78,35 @@ def init_garmin():
         time.sleep(wait_s)
 
     # Important: never do two immediate login attempts back-to-back.
-    # If token-based login fails, only retry with backoff (for 429) or abort.
-    max_retries = 2  # Reduced: only 1 retry after initial attempt
+    # Strategy:
+    # 1) If stored tokens exist, try to use them WITHOUT triggering SSO login.
+    # 2) Only if that fails, attempt an interactive login (with backoff on 429).
+    tokens_loaded = False
+    if os.path.exists(TOKEN_DIR):
+        try:
+            client.garth.load(TOKEN_DIR)
+            tokens_loaded = True
+            # Ensure display_name is set; otherwise endpoints like user summary hit ".../daily/None" -> 403.
+            try:
+                settings = client.get_userprofile_settings()
+                display_name = settings.get("displayName") if isinstance(settings, dict) else None
+                if display_name:
+                    client.display_name = display_name
+            except Exception:
+                pass
+
+            # Lightweight "am I authenticated?" call. Should not require SSO widget login.
+            client.get_user_profile()
+            return client
+        except Exception as e:
+            if _is_rate_limit_error(e):
+                print(f"❌ Garmin rate-limited (429) even when using stored tokens: {str(e)[:200]}")
+                return None
+            # Otherwise fall through to a real login attempt.
+
+    max_retries = 2  # only 1 retry after initial attempt
     for attempt in range(max_retries):
         try:
-            if os.path.exists(TOKEN_DIR):
-                client.garth.load(TOKEN_DIR)
             client.login()
             os.makedirs(TOKEN_DIR, exist_ok=True)
             client.garth.dump(TOKEN_DIR)
@@ -82,8 +115,8 @@ def init_garmin():
             if _is_rate_limit_error(e) and attempt < (max_retries - 1):
                 _sleep_backoff(attempt)
                 continue
-            # Log the error and exit gracefully (don't retry forever)
-            print(f"❌ Garmin Login failed (will not retry): {str(e)[:200]}")
+            suffix = " (tokens loaded but unusable)" if tokens_loaded else ""
+            print(f"❌ Garmin Login failed{suffix} (will not retry): {str(e)[:200]}")
             return None
 
 def fetch_and_save_activities(client):
