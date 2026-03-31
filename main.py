@@ -1,6 +1,7 @@
 import os
 import csv
 import time
+import random
 import schedule
 from datetime import date, timedelta
 from dotenv import load_dotenv
@@ -53,22 +54,37 @@ def get_start_date_and_existing_data(filename, key_column):
 # --- PART 1: GARMIN LOGIC ---
 def init_garmin():
     client = Garmin(EMAIL, PASSWORD)
-    if os.path.exists(TOKEN_DIR):
+    def _is_rate_limit_error(err: Exception) -> bool:
+        msg = str(err)
+        return ("429" in msg) or ("Too Many Requests" in msg)
+
+    def _sleep_backoff(attempt: int) -> None:
+        # Longer exponential backoff: 5min, 15min, 30min (Garmin needs more breathing room)
+        base_minutes = 5 * (3 ** attempt)  # 5, 15, 45 minutes
+        jitter = random.randint(0, 120)  # Up to 2 min jitter
+        wait_s = (base_minutes * 60) + jitter
+        wait_min = wait_s // 60
+        print(f"⏳ Garmin rate-limited (429). Waiting {wait_min} minutes before retry...")
+        time.sleep(wait_s)
+
+    # Important: never do two immediate login attempts back-to-back.
+    # If token-based login fails, only retry with backoff (for 429) or abort.
+    max_retries = 2  # Reduced: only 1 retry after initial attempt
+    for attempt in range(max_retries):
         try:
-            client.garth.load(TOKEN_DIR)
+            if os.path.exists(TOKEN_DIR):
+                client.garth.load(TOKEN_DIR)
             client.login()
+            os.makedirs(TOKEN_DIR, exist_ok=True)
+            client.garth.dump(TOKEN_DIR)
             return client
-        except Exception:
-            pass 
-            
-    try:
-        client.login()
-        os.makedirs(TOKEN_DIR, exist_ok=True)
-        client.garth.dump(TOKEN_DIR)
-        return client
-    except Exception as e:
-        print(f"❌ Garmin Login failed: {e}")
-        return None
+        except Exception as e:
+            if _is_rate_limit_error(e) and attempt < (max_retries - 1):
+                _sleep_backoff(attempt)
+                continue
+            # Log the error and exit gracefully (don't retry forever)
+            print(f"❌ Garmin Login failed (will not retry): {str(e)[:200]}")
+            return None
 
 def fetch_and_save_activities(client):
     print("\n🚴 Checking fitness data (Delta Load)...")
