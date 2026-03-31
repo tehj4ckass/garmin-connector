@@ -36,6 +36,51 @@ INITIAL_SYNC_DAYS = int(os.getenv("INITIAL_SYNC_DAYS", 365)) # How many days to 
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
+FITNESS_FIELDNAMES = [
+    "Activity_ID",
+    "Date",
+    "Type",
+    "Distance_km",
+    "Duration_min",
+    "Moving_Time_min",
+    "Elapsed_Time_min",
+    "Avg_Speed_kmh",
+    "Max_Speed_kmh",
+    "Avg_HR",
+    "Max_HR",
+    "Avg_Power_W",
+    "Max_Power_W",
+    "Normalized_Power_W",
+    "Work_kJ",
+    "Avg_Cadence_rpm",
+    "Training_Effect_Aerobic",
+    "Training_Effect_Anaerobic",
+    "Intensity_Factor",
+    "Training_Stress_Score",
+    "VO2Max_Estimate",
+    "Intensity_Minutes",
+    "Calories",
+    "Elevation_Gain",
+]
+
+HEALTH_FIELDNAMES = [
+    "Date",
+    "Resting_HR",
+    "Avg_HRV",
+    "Avg_Stress",
+    "Max_Stress",
+    "Body_Battery_High",
+    "Body_Battery_Low",
+    "Sleep_Hours",
+    "Sleep_Start_Local",
+    "Sleep_End_Local",
+    "Sleep_Score",
+    "Steps",
+    "Intensity_Minutes",
+    "Active_Calories",
+    "Total_Calories",
+]
+
 # --- HELPER FUNCTION FOR DELTA LOAD ---
 def get_start_date_and_existing_data(filename, key_column):
     """Reads the CSV, returns existing data and the start date for the delta load."""
@@ -128,25 +173,142 @@ def fetch_and_save_activities(client):
     print(f"📅 Syncing new activities from {start_date.isoformat()} until today ({today.isoformat()})...")
     
     try:
+        def _fmt_num(val, decimals=None):
+            if val is None or val == "N/A":
+                return "N/A"
+            try:
+                f = float(val)
+                if decimals is None:
+                    # Keep integers without trailing .0 when possible
+                    if f.is_integer():
+                        return str(int(f))
+                    return str(f).replace(".", ",")
+                return str(round(f, decimals)).replace(".", ",")
+            except Exception:
+                return "N/A"
+
+        def _get_any(d: dict, keys: list[str]):
+            for k in keys:
+                if k in d and d.get(k) is not None:
+                    return d.get(k)
+            return None
+
+        def _seconds_to_minutes_str(seconds, decimals=1):
+            if seconds is None:
+                return "N/A"
+            try:
+                return _fmt_num(float(seconds) / 60.0, decimals)
+            except Exception:
+                return "N/A"
+
+        def _ms_to_kmh_str(ms, decimals=1):
+            if ms is None:
+                return "N/A"
+            try:
+                return _fmt_num(float(ms) * 3.6, decimals)
+            except Exception:
+                return "N/A"
+
         # Fetch all activities in range
         activities = client.get_activities_by_date(start_date.isoformat(), today.isoformat())
         
         new_count = 0
         for activity in activities:
             activity_id = str(activity.get('activityId', ''))
-            distance_km = activity.get('distance', 0) / 1000 if activity.get('distance') else 0
-            duration_min = activity.get('duration', 0) / 60 if activity.get('duration') else 0
-            speed_kmh = activity.get('averageSpeed', 0) * 3.6 if activity.get('averageSpeed') else 0
+            distance_km = (activity.get('distance') or 0) / 1000
+            elapsed_s = activity.get('duration') or 0
+            moving_s = _get_any(activity, ["movingDuration", "movingDurationInSeconds", "movingTimeInSeconds"]) or elapsed_s
+            duration_min = elapsed_s / 60 if elapsed_s else 0
+            speed_kmh = (activity.get('averageSpeed') or 0) * 3.6
+            max_speed_kmh = _ms_to_kmh_str(_get_any(activity, ["maxSpeed", "maximumSpeed"]), 1)
+
+            # Try to extract the requested advanced metrics from the activity summary first.
+            avg_power = _get_any(activity, ["averagePower", "avgPower"])
+            max_power = _get_any(activity, ["maxPower", "maximumPower"])
+            np_power = _get_any(activity, ["normalizedPower", "normPower", "normalizedPowerValue"])
+            work_val = _get_any(activity, ["work", "workInJoules", "totalWork", "totalWorkInJoules"])
+            avg_cadence = _get_any(activity, ["averageCadence", "avgCadence"])
+            te_aer = _get_any(activity, ["aerobicTrainingEffect", "trainingEffect", "aerobicEffect"])
+            te_ana = _get_any(activity, ["anaerobicTrainingEffect", "anaerobicEffect"])
+            intensity_factor = _get_any(activity, ["intensityFactor", "if"])
+            tss = _get_any(activity, ["trainingStressScore", "tss"])
+            vo2 = _get_any(activity, ["vo2MaxValue", "vO2MaxValue", "vo2Max", "VO2MaxValue"])
+            intensity_minutes = _get_any(activity, ["intensityMinutes", "intensityMinutesValue"])
+            if intensity_minutes is None:
+                mod = _get_any(activity, ["moderateIntensityMinutes"])
+                vig = _get_any(activity, ["vigorousIntensityMinutes"])
+                try:
+                    if mod is not None or vig is not None:
+                        intensity_minutes = (int(mod or 0) + int(vig or 0))
+                except Exception:
+                    pass
+
+            # If key fields are missing, fetch details (1 extra call per activity at most).
+            needs_details = any(
+                v is None
+                for v in [np_power, intensity_factor, tss, vo2, intensity_minutes, avg_power, max_power, work_val, avg_cadence, te_aer, te_ana]
+            )
+            if needs_details and activity_id:
+                try:
+                    details = client.get_activity_details(activity_id) or {}
+                    if isinstance(details, dict):
+                        avg_power = avg_power if avg_power is not None else _get_any(details, ["averagePower", "avgPower"])
+                        max_power = max_power if max_power is not None else _get_any(details, ["maxPower", "maximumPower"])
+                        np_power = np_power if np_power is not None else _get_any(details, ["normalizedPower", "normPower", "normalizedPowerValue"])
+                        work_val = work_val if work_val is not None else _get_any(details, ["work", "workInJoules", "totalWork", "totalWorkInJoules"])
+                        avg_cadence = avg_cadence if avg_cadence is not None else _get_any(details, ["averageCadence", "avgCadence"])
+                        te_aer = te_aer if te_aer is not None else _get_any(details, ["aerobicTrainingEffect", "trainingEffect", "aerobicEffect"])
+                        te_ana = te_ana if te_ana is not None else _get_any(details, ["anaerobicTrainingEffect", "anaerobicEffect"])
+                        intensity_factor = intensity_factor if intensity_factor is not None else _get_any(details, ["intensityFactor", "if"])
+                        tss = tss if tss is not None else _get_any(details, ["trainingStressScore", "tss"])
+                        vo2 = vo2 if vo2 is not None else _get_any(details, ["vo2MaxValue", "vO2MaxValue", "vo2Max", "VO2MaxValue"])
+                        intensity_minutes = intensity_minutes if intensity_minutes is not None else _get_any(details, ["intensityMinutes", "intensityMinutesValue"])
+                        if intensity_minutes is None:
+                            mod = _get_any(details, ["moderateIntensityMinutes"])
+                            vig = _get_any(details, ["vigorousIntensityMinutes"])
+                            try:
+                                if mod is not None or vig is not None:
+                                    intensity_minutes = (int(mod or 0) + int(vig or 0))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            # Work_kJ: try to interpret Garmin's "work" value; if unavailable, approximate from avg power & moving time.
+            work_kj = None
+            try:
+                if work_val is not None:
+                    w = float(work_val)
+                    # Heuristic: if it's huge, treat as Joules; else treat as kJ
+                    work_kj = (w / 1000.0) if w > 5000 else w
+                elif avg_power is not None and moving_s:
+                    work_kj = (float(avg_power) * float(moving_s)) / 1000.0
+            except Exception:
+                work_kj = None
             
             row = {
                 'Activity_ID': activity_id,
                 'Date': activity.get('startTimeLocal', '')[:10],
                 'Type': activity.get('activityType', {}).get('typeKey', 'Unknown'),
-                'Distance_km': str(round(distance_km, 2)).replace('.', ','),
-                'Duration_min': str(round(duration_min, 1)).replace('.', ','),
-                'Avg_Speed_kmh': str(round(speed_kmh, 1)).replace('.', ','),
+                'Distance_km': _fmt_num(distance_km, 2),
+                'Duration_min': _fmt_num(duration_min, 1),
+                'Moving_Time_min': _seconds_to_minutes_str(moving_s, 1),
+                'Elapsed_Time_min': _seconds_to_minutes_str(elapsed_s, 1),
+                'Avg_Speed_kmh': _fmt_num(speed_kmh, 1),
+                'Max_Speed_kmh': max_speed_kmh,
                 'Avg_HR': activity.get('averageHR', 'N/A'),
                 'Max_HR': activity.get('maxHR', 'N/A'),
+                'Avg_Power_W': _fmt_num(avg_power, 0),
+                'Max_Power_W': _fmt_num(max_power, 0),
+                'Normalized_Power_W': _fmt_num(np_power, 0),
+                'Work_kJ': _fmt_num(work_kj, 0),
+                'Avg_Cadence_rpm': _fmt_num(avg_cadence, 0),
+                'Training_Effect_Aerobic': _fmt_num(te_aer, 1),
+                'Training_Effect_Anaerobic': _fmt_num(te_ana, 1),
+                'Intensity_Factor': _fmt_num(intensity_factor, 2),
+                'Training_Stress_Score': _fmt_num(tss, 0),
+                'VO2Max_Estimate': _fmt_num(vo2, 1),
+                'Intensity_Minutes': _fmt_num(intensity_minutes, 0),
                 'Calories': activity.get('calories', 0),
                 'Elevation_Gain': str(round(activity.get('elevationGain', 0), 0)).replace('.', ',') if activity.get('elevationGain') else "0"
             }
@@ -163,9 +325,13 @@ def fetch_and_save_activities(client):
         
         if sorted_data:
             with open(CSV_FITNESS, mode='w', newline='', encoding='utf-8') as file:
-                writer = csv.DictWriter(file, fieldnames=sorted_data[0].keys(), delimiter='|')
+                writer = csv.DictWriter(file, fieldnames=FITNESS_FIELDNAMES, delimiter='|', extrasaction='ignore')
                 writer.writeheader()
-                writer.writerows(sorted_data)
+                for r in sorted_data:
+                    for k in FITNESS_FIELDNAMES:
+                        if k not in r:
+                            r[k] = "N/A"
+                    writer.writerow(r)
                 
         print(f"✅ Fitness data secured! ({new_count} new/updated activities found)")
         return True
@@ -191,6 +357,41 @@ def fetch_and_save_health(client):
     while current_date <= today:
         target_date = current_date.isoformat()
         try:
+            def _fmt_num(val, decimals=None):
+                if val is None or val == "N/A":
+                    return "N/A"
+                try:
+                    f = float(val)
+                    if decimals is None:
+                        if f.is_integer():
+                            return str(int(f))
+                        return str(f).replace(".", ",")
+                    return str(round(f, decimals)).replace(".", ",")
+                except Exception:
+                    return "N/A"
+
+            def _get_any(d: dict, keys: list[str]):
+                for k in keys:
+                    if k in d and d.get(k) is not None:
+                        return d.get(k)
+                return None
+
+            def _seconds_to_minutes(val, decimals=0):
+                if val is None:
+                    return "N/A"
+                try:
+                    return _fmt_num(float(val) / 60.0, decimals)
+                except Exception:
+                    return "N/A"
+
+            def _seconds_to_hours(val, decimals=1):
+                if val is None:
+                    return "N/A"
+                try:
+                    return _fmt_num(float(val) / 3600.0, decimals)
+                except Exception:
+                    return "N/A"
+
             stats = client.get_stats(target_date)
             sleep = client.get_sleep_data(target_date)
             
@@ -206,11 +407,48 @@ def fetch_and_save_health(client):
             
             sleep_score = 'N/A'
             sleep_hours = 0.0
+            time_in_bed_hours = "N/A"
+            awake_min = "N/A"
+            sleep_start_local = "N/A"
+            sleep_end_local = "N/A"
+            light_min = "N/A"
+            deep_min = "N/A"
+            rem_min = "N/A"
             
             if sleep and 'dailySleepDTO' in sleep:
                 sleep_dto = sleep['dailySleepDTO']
                 sleep_time_seconds = sleep_dto.get('sleepTimeSeconds') or 0
                 sleep_hours = round(sleep_time_seconds / 3600, 1)
+                time_in_bed_hours = _seconds_to_hours(_get_any(sleep_dto, ["timeInBedSeconds", "totalTimeInBedSeconds"]), 1)
+                awake_min = _seconds_to_minutes(_get_any(sleep_dto, ["awakeDuration", "awakeTimeSeconds", "awakeDurationSeconds"]), 0)
+
+                sleep_start_local = _get_any(sleep_dto, ["sleepStartTimestampLocal", "sleepStartTimeLocal"])
+                sleep_end_local = _get_any(sleep_dto, ["sleepEndTimestampLocal", "sleepEndTimeLocal"])
+
+                # Sleep stages: try map first, then list aggregation.
+                stages_map = sleep_dto.get("sleepLevelsMap") if isinstance(sleep_dto.get("sleepLevelsMap"), dict) else None
+                if stages_map:
+                    light_min = _seconds_to_minutes(_get_any(stages_map, ["light", "LIGHT"]), 0)
+                    deep_min = _seconds_to_minutes(_get_any(stages_map, ["deep", "DEEP"]), 0)
+                    rem_min = _seconds_to_minutes(_get_any(stages_map, ["rem", "REM"]), 0)
+                else:
+                    levels = sleep_dto.get("sleepLevels")
+                    if isinstance(levels, list):
+                        sums = {"light": 0, "deep": 0, "rem": 0}
+                        for lvl in levels:
+                            if not isinstance(lvl, dict):
+                                continue
+                            level_name = (lvl.get("sleepLevel") or lvl.get("level") or "").lower()
+                            dur = lvl.get("durationInSeconds") or lvl.get("duration") or 0
+                            if level_name in sums:
+                                try:
+                                    sums[level_name] += float(dur)
+                                except Exception:
+                                    pass
+                        if sums["light"] > 0 or sums["deep"] > 0 or sums["rem"] > 0:
+                            light_min = _seconds_to_minutes(sums["light"], 0)
+                            deep_min = _seconds_to_minutes(sums["deep"], 0)
+                            rem_min = _seconds_to_minutes(sums["rem"], 0)
                 
                 if 'sleepScores' in sleep_dto and 'overall' in sleep_dto['sleepScores']:
                     sleep_score = sleep_dto['sleepScores']['overall'].get('value', 'N/A')
@@ -218,14 +456,40 @@ def fetch_and_save_health(client):
                     score_data = sleep_dto['sleepScore']
                     sleep_score = score_data.get('value', 'N/A') if isinstance(score_data, dict) else score_data
 
+            # Daily intensity minutes (if available)
+            intensity_minutes = _get_any(stats, ["intensityMinutes", "intensityMinutesValue"])
+            if intensity_minutes is None:
+                mod = _get_any(stats, ["moderateIntensityMinutes"])
+                vig = _get_any(stats, ["vigorousIntensityMinutes"])
+                try:
+                    if mod is not None or vig is not None:
+                        intensity_minutes = (int(mod or 0) + int(vig or 0))
+                except Exception:
+                    pass
+
+            active_cal = _get_any(stats, ["activeKilocalories", "activeCalories"])
+            total_cal = _get_any(stats, ["totalKilocalories", "totalCalories", "burnedKilocalories"])
+            floors = _get_any(stats, ["floorsClimbed", "floors", "totalFloorsClimbed"])
+            max_stress = _get_any(stats, ["maxStressLevel", "maxStress"])
+            bb_high = _get_any(stats, ["bodyBatteryHighestValue", "bodyBatteryHigh", "bodyBatteryMax", "bodyBatteryHighest"])
+            bb_low = _get_any(stats, ["bodyBatteryLowestValue", "bodyBatteryLow", "bodyBatteryMin", "bodyBatteryLowest"])
+
             row = {
                 'Date': target_date,
                 'Resting_HR': stats.get('restingHeartRate', 'N/A'),
                 'Avg_HRV': hrv_avg,
                 'Avg_Stress': stats.get('averageStressLevel', 'N/A'),
+                'Max_Stress': _fmt_num(max_stress, 0),
+                'Body_Battery_High': _fmt_num(bb_high, 0),
+                'Body_Battery_Low': _fmt_num(bb_low, 0),
                 'Sleep_Hours': str(sleep_hours).replace('.', ','),
+                'Sleep_Start_Local': sleep_start_local or "N/A",
+                'Sleep_End_Local': sleep_end_local or "N/A",
                 'Sleep_Score': sleep_score,
-                'Steps': stats.get('totalSteps', 0)
+                'Steps': stats.get('totalSteps', 0),
+                'Intensity_Minutes': _fmt_num(intensity_minutes, 0),
+                'Active_Calories': _fmt_num(active_cal, 0),
+                'Total_Calories': _fmt_num(total_cal, 0),
             }
             
             existing_health[target_date] = row
@@ -245,9 +509,13 @@ def fetch_and_save_health(client):
     try:
         if sorted_data:
             with open(CSV_HEALTH, mode='w', newline='', encoding='utf-8') as file:
-                writer = csv.DictWriter(file, fieldnames=sorted_data[0].keys(), delimiter='|')
+                writer = csv.DictWriter(file, fieldnames=HEALTH_FIELDNAMES, delimiter='|', extrasaction='ignore')
                 writer.writeheader()
-                writer.writerows(sorted_data)
+                for r in sorted_data:
+                    for k in HEALTH_FIELDNAMES:
+                        if k not in r:
+                            r[k] = "N/A"
+                    writer.writerow(r)
         print(f"✅ Health data secured! ({success_count} entries processed)")
         return True
     except Exception as e:
