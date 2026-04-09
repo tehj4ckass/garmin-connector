@@ -3,8 +3,8 @@ venv/
 garmin_tokens/
 credentials.json
 token.json
-fitness_log.csv
-health_log.csv
+fitness_data.json
+health_data.json
 __pycache__/
 *.pyc
 .git/

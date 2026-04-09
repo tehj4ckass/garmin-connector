@@ -1,6 +1,6 @@
 # ⌚ Garmin-to-Drive Sync (Garmin Connector)
 
-This tool automates the export of your Garmin fitness and health data into CSV files and synchronizes them directly with your Google Drive. It is specifically designed to provide a structured, long-term data foundation that can be easily integrated into **AI-powered coaching systems**, custom dashboards, or personal health analytics.
+This tool automates the export of your Garmin fitness and health data into JSON files and synchronizes them directly with your Google Drive. It is specifically designed to provide a structured, long-term data foundation that can be easily integrated into **AI-powered coaching systems**, custom dashboards, or personal health analytics.
 
 ## 🚀 Features
 
@@ -25,7 +25,7 @@ GARMIN_EMAIL=your.email@gmail.com
 GARMIN_PASSWORD=your_password
 INITIAL_SYNC_DAYS=90
 ```
-`INITIAL_SYNC_DAYS` defines how many days of history should be fetched during the very first run (if no CSV files exist).
+`INITIAL_SYNC_DAYS` defines how many days of history should be fetched during the very first run (if no JSON export files exist yet).
 
 ### 3. Google Drive API
 Place your `credentials.json` from the Google Cloud Console in the root directory. On the first run, a browser window will open for authentication to generate the `token.json`.
@@ -39,46 +39,25 @@ docker-compose up -d
 
 The container stays active in the background and performs the sync every 2 hours.
 
-## 📂 File Structure & CSV Reference
+## 📂 File Structure & JSON export
 
-- `main.py`: Main logic for Garmin API and Google Drive upload.
+- `garmin_connector.py`: Einstiegspunkt — Garmin-API, JSON-Export, Google-Drive-Upload und Scheduler.
 - `garmin_tokens/`: Stores session tokens for Garmin (prevents constant logins).
 - `token.json`: Google OAuth refresh token.
 
-### 📋 CSV Data Format
-All CSV files use a pipe `|` as a delimiter and commas `,` for decimal values to ensure compatibility with various analysis tools.
+### JSON files
 
-#### `fitness_log.csv` (Activities)
-| Column | Description |
-| :--- | :--- |
-| **Activity_ID** | Unique identifier from Garmin for the activity. |
-| **Date** | Date of the activity (YYYY-MM-DD). |
-| **Type** | Type of activity (e.g., `running`, `cycling`, `walking`). |
-| **Distance_km** | Total distance covered in kilometers. |
-| **Duration_min** | Total duration of the activity in minutes. |
-| **Avg_Speed_kmh** | Average speed during the activity (km/h). |
-| **Avg_HR** | Average heart rate during the activity. |
-| **Max_HR** | Maximum heart rate reached. |
-| **Calories** | Total calories burned. |
-| **Elevation_Gain** | Total elevation gain in meters. |
+- **`fitness_data.json`:** Top-level object with `activities` (array). Each activity includes identifiers, date, type, distances, durations, speeds, heart rate, power, training metrics, calories, elevation, and optional `hr_zones`.
+- **`health_data.json`:** Top-level object with `days` (array). Each day includes date, resting HR, HRV, stress, body battery, sleep fields, steps, intensity minutes, and calories.
 
-#### `health_log.csv` (Daily Metrics)
-| Column | Description |
-| :--- | :--- |
-| **Date** | The specific day (YYYY-MM-DD). |
-| **Resting_HR** | Resting heart rate for that day. |
-| **Avg_HRV** | Average Heart Rate Variability (HRV) during the night. |
-| **Avg_Stress** | Average stress level (0-100). |
-| **Sleep_Hours** | Total duration of sleep in hours. |
-| **Sleep_Score** | Garmin Sleep Score (0-100). |
-| **Steps** | Total step count for the day. |
+Both files include `schema_version`, `generated_at`, and `source` metadata for tooling.
 
 ## ⚙️ Technical Notes
 
 - **API Security Delay:** To prevent being rate-limited or blocked by the Garmin API, especially during the initial sync (more than 30 days), a "Security Delay" is automatically applied. The script waits briefly between daily health data requests to ensure a stable and safe data transfer.
 
 ## 🔒 Security
-Sensitive data such as passwords, tokens, and your personal CSV logs are listed in `.gitignore` and `.dockerignore` to prevent accidental sharing.
+Sensitive data such as passwords, tokens, and your personal JSON exports are listed in `.gitignore` and `.dockerignore` to prevent accidental sharing.
 
 ---
 *Note: This tool is intended for private use. Please respect the terms of service of the respective API providers.*

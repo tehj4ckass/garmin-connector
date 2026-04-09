@@ -12,4 +12,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Führe das Skript aus (-u sorgt dafür, dass wir die Print-Ausgaben direkt im Docker-Log sehen)
-CMD ["python", "-u", "main.py"]
+CMD ["python", "-u", "garmin_connector.py"]

@@ -6,5 +6,5 @@ services:
     volumes:
       # Hiermit verknüpfen wir den Ordner auf dem Pi (links) 
       # mit dem Arbeitsordner im Container (rechts). 
-      # So bleiben CSVs und Tokens auch nach einem Neustart erhalten!
+      # So bleiben JSON-Exporte und Tokens auch nach einem Neustart erhalten!
       - .:/app
