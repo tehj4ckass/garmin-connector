@@ -32,6 +32,7 @@ TOKEN_DIR = "./garmin_tokens"
 
 JSON_FITNESS = "fitness_data.json"
 JSON_HEALTH = "health_data.json"
+FITNESS_SCHEMA_VERSION = 2
 INITIAL_SYNC_DAYS = int(os.getenv("INITIAL_SYNC_DAYS", 365)) # How many days to fetch if no file exists
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
@@ -106,6 +107,26 @@ def _health_sync_start_date(existing_by_day: dict) -> date:
     return date.today() - timedelta(days=INITIAL_SYNC_DAYS)
 
 
+def _get_first(d: dict, keys: list[str]):
+    """Erstes vorhandenes, nicht-None-Feld (Garmin nutzt wechselnde Key-Namen)."""
+    for k in keys:
+        if k in d and d.get(k) is not None:
+            return d.get(k)
+    return None
+
+
+def _to_float(v):
+    """Skalare für JSON: None bleibt None; bool unverändert (wie bisher bei Aktivitäten); sonst float."""
+    if v is None:
+        return None
+    try:
+        if isinstance(v, bool):
+            return v
+        return float(v)
+    except Exception:
+        return None
+
+
 # --- PART 1: GARMIN LOGIC ---
 def init_garmin():
     client = Garmin(EMAIL, PASSWORD)
@@ -164,6 +185,215 @@ def init_garmin():
             print(f"❌ Garmin Login failed{suffix} (will not retry): {str(e)[:200]}")
             return None
 
+
+def fetch_athlete_snapshot(client) -> dict:
+    """Aktueller Athleten-Snapshot (best-effort; fehlende Endpoints → null). VO2: training_status, dann max_metrics."""
+
+    def _safe(fn):
+        try:
+            return fn()
+        except Exception:
+            return None
+
+    def _vo2_block(block) -> float | None:
+        if not isinstance(block, dict):
+            return None
+        v = block.get("vo2MaxPreciseValue") or block.get("vo2MaxValue")
+        return _to_float(v)
+
+    def _vo2_from_training_status(ts):
+        if not isinstance(ts, dict):
+            return None, None, None
+        mrv = ts.get("mostRecentVo2Max") or ts.get("mostRecentVO2Max")
+        if not isinstance(mrv, dict):
+            return None, None, None
+        return (
+            _vo2_block(mrv.get("running")),
+            _vo2_block(mrv.get("cycling")),
+            _vo2_block(mrv.get("generic")),
+        )
+
+    def _vo2_from_max_metrics(mm) -> tuple[float | None, float | None]:
+        run, cyc = None, None
+        if not isinstance(mm, dict):
+            return run, cyc
+
+        def walk(o):
+            nonlocal run, cyc
+            if isinstance(o, dict):
+                st = str(o.get("sportType") or o.get("sport") or "").upper()
+                has_vo2 = any(k.lower().startswith("vo2") for k in o if isinstance(k, str))
+                if has_vo2 and st:
+                    v = _vo2_block(o)
+                    if v is not None:
+                        if "CYCL" in st:
+                            cyc = cyc or v
+                        if "RUN" in st:
+                            run = run or v
+                for v in o.values():
+                    walk(v)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v)
+
+        walk(mm)
+        return run, cyc
+
+    def _hr_zones(blob):
+        if not isinstance(blob, dict):
+            return None
+        ud = blob.get("userData")
+        if isinstance(ud, dict):
+            z = ud.get("heartRateZones")
+            if isinstance(z, (list, dict)):
+                return z
+        z = blob.get("heartRateZones")
+        return z if isinstance(z, (list, dict)) else None
+
+    def _demographics(profile: dict) -> dict:
+        o = {}
+        if not isinstance(profile, dict):
+            return o
+        ud = profile.get("userData")
+        if not isinstance(ud, dict):
+            ud = profile
+        bd = ud.get("birthDate")
+        if bd:
+            o["birth_date"] = str(bd)[:10]
+            try:
+                bdate = date.fromisoformat(str(bd)[:10])
+                t = date.today()
+                o["age_years"] = t.year - bdate.year - ((t.month, t.day) < (bdate.month, bdate.day))
+            except Exception:
+                pass
+        if ud.get("gender") is not None:
+            o["gender"] = ud.get("gender")
+        if ud.get("height") is not None and _to_float(ud.get("height")) is not None:
+            o["height_cm"] = _to_float(ud.get("height"))
+        if ud.get("weight") is not None and _to_float(ud.get("weight")) is not None:
+            o["weight_kg"] = _to_float(ud.get("weight"))
+        mhr = ud.get("maxHeartRate") or ud.get("maxHeartRateUsed")
+        if mhr is not None:
+            try:
+                o["max_hr_bpm"] = int(float(mhr))
+            except Exception:
+                pass
+        mus = ud.get("measurementSystem") or profile.get("measurementSystem")
+        if mus is not None:
+            o["unit_system"] = mus
+        tz = ud.get("timeZone") or profile.get("timeZone")
+        if tz is not None:
+            o["time_zone"] = tz
+        return o
+
+    def _fitness_age(fa) -> float | None:
+        if not isinstance(fa, dict):
+            return None
+        v = fa.get("fitnessAge") or fa.get("chronologicalAge")
+        if v is None and isinstance(fa.get("fitnessAgeData"), dict):
+            v = fa["fitnessAgeData"].get("fitnessAge")
+        return _to_float(v)
+
+    def _lactate_hrs(lt) -> dict:
+        o = {}
+        if not isinstance(lt, dict):
+            return o
+        shr = lt.get("speed_and_heart_rate")
+        if not isinstance(shr, dict):
+            return o
+        hr, hrc = shr.get("heartRate"), shr.get("heartRateCycling")
+        if hr is not None:
+            try:
+                o["lactate_threshold_hr_running_bpm"] = int(float(hr))
+            except Exception:
+                pass
+        if hrc is not None:
+            try:
+                o["lactate_threshold_hr_cycling_bpm"] = int(float(hrc))
+            except Exception:
+                pass
+        return o
+
+    def _ftp_watts(ftp) -> int | None:
+        if isinstance(ftp, list) and ftp:
+            ftp = ftp[0]
+        if not isinstance(ftp, dict):
+            return None
+        w = ftp.get("ftp") or ftp.get("functionalThresholdPower") or ftp.get("value")
+        if w is None:
+            return None
+        try:
+            return int(round(float(w)))
+        except Exception:
+            return None
+
+    today_s = date.today().isoformat()
+    out: dict = {"fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    sources_ok: list[str] = []
+
+    def tick():
+        time.sleep(0.12)
+
+    ts = _safe(lambda: client.get_training_status(today_s))
+    tick()
+    if ts:
+        sources_ok.append("training_status")
+    vo2_run, vo2_cyc, vo2_gen = _vo2_from_training_status(ts)
+    out["vo2max_running"] = vo2_run or vo2_gen
+    out["vo2max_cycling"] = vo2_cyc
+
+    mm = _safe(lambda: client.get_max_metrics(today_s))
+    tick()
+    if mm:
+        sources_ok.append("max_metrics")
+    mr, mc = _vo2_from_max_metrics(mm)
+    if out.get("vo2max_running") is None and mr is not None:
+        out["vo2max_running"] = mr
+    if out.get("vo2max_cycling") is None and mc is not None:
+        out["vo2max_cycling"] = mc
+
+    profile = _safe(lambda: client.get_user_profile())
+    tick()
+    if profile:
+        sources_ok.append("user_profile")
+    out.update(_demographics(profile or {}))
+
+    settings = _safe(lambda: client.get_userprofile_settings())
+    tick()
+    if settings:
+        sources_ok.append("userprofile_settings")
+    z = _hr_zones(settings or {}) or _hr_zones(profile or {})
+    if z is not None:
+        out["hr_zones"] = z
+
+    fa = _safe(lambda: client.get_fitnessage_data(today_s))
+    tick()
+    if fa:
+        sources_ok.append("fitnessage")
+    out["fitness_age"] = _fitness_age(fa)
+
+    lt = _safe(lambda: client.get_lactate_threshold(latest=True))
+    tick()
+    if lt:
+        sources_ok.append("lactate_threshold")
+    out.update(_lactate_hrs(lt))
+
+    ftp = _safe(lambda: client.get_cycling_ftp())
+    tick()
+    if ftp:
+        sources_ok.append("cycling_ftp")
+    out["cycling_ftp_watts"] = _ftp_watts(ftp)
+
+    hr_day = _safe(lambda: client.get_heart_rates(today_s))
+    tick()
+    if hr_day:
+        sources_ok.append("heart_rates")
+    out["resting_hr_bpm"] = _to_float((hr_day or {}).get("restingHeartRate"))
+
+    out["sources_fetched"] = sources_ok
+    return out
+
+
 def fetch_and_save_activities(client):
     print("\n🚴 Checking fitness data (Delta Load)...")
     existing_fitness_json = _load_fitness_json_by_id()
@@ -175,11 +405,8 @@ def fetch_and_save_activities(client):
     print(f"📅 Syncing activities from {start_date.isoformat()} until today ({today.isoformat()})...")
 
     try:
-        def _get_any(d: dict, keys: list[str]):
-            for k in keys:
-                if k in d and d.get(k) is not None:
-                    return d.get(k)
-            return None
+        print("👤 Fetching athlete profile (VO2, zones, demographics)...")
+        athlete = fetch_athlete_snapshot(client)
 
         def _ms_to_kmh_float(ms):
             if ms is None:
@@ -196,29 +423,29 @@ def fetch_and_save_activities(client):
             activity_id = str(activity.get('activityId', ''))
             distance_km = (activity.get('distance') or 0) / 1000
             elapsed_s = activity.get('duration') or 0
-            moving_s = _get_any(activity, ["movingDuration", "movingDurationInSeconds", "movingTimeInSeconds"]) or elapsed_s
+            moving_s = _get_first(activity, ["movingDuration", "movingDurationInSeconds", "movingTimeInSeconds"]) or elapsed_s
             duration_min = elapsed_s / 60 if elapsed_s else 0
             speed_kmh = (activity.get('averageSpeed') or 0) * 3.6
-            max_speed_kmh = _ms_to_kmh_float(_get_any(activity, ["maxSpeed", "maximumSpeed"]))
+            max_speed_kmh = _ms_to_kmh_float(_get_first(activity, ["maxSpeed", "maximumSpeed"]))
 
             # Try to extract the requested advanced metrics from the activity summary first.
-            avg_power = _get_any(activity, ["averagePower", "avgPower"])
-            max_power = _get_any(activity, ["maxPower", "maximumPower"])
-            np_power = _get_any(activity, ["normalizedPower", "normPower", "normalizedPowerValue"])
-            work_val = _get_any(activity, ["work", "workInJoules", "totalWork", "totalWorkInJoules"])
-            avg_cadence = _get_any(activity, ["averageCadence", "avgCadence"])
-            te_aer = _get_any(activity, ["aerobicTrainingEffect", "trainingEffect", "aerobicEffect"])
-            te_ana = _get_any(activity, ["anaerobicTrainingEffect", "anaerobicEffect"])
-            training_effect_primary = _get_any(activity, ["trainingEffect"])
-            te_label = _get_any(activity, ["trainingEffectLabel"])
-            exercise_load = _get_any(activity, ["exerciseLoad"])
-            intensity_factor = _get_any(activity, ["intensityFactor", "if"])
-            tss = _get_any(activity, ["trainingStressScore", "tss"])
-            vo2 = _get_any(activity, ["vo2MaxValue", "vO2MaxValue", "vo2Max", "VO2MaxValue"])
-            intensity_minutes = _get_any(activity, ["intensityMinutes", "intensityMinutesValue"])
+            avg_power = _get_first(activity, ["averagePower", "avgPower"])
+            max_power = _get_first(activity, ["maxPower", "maximumPower"])
+            np_power = _get_first(activity, ["normalizedPower", "normPower", "normalizedPowerValue"])
+            work_val = _get_first(activity, ["work", "workInJoules", "totalWork", "totalWorkInJoules"])
+            avg_cadence = _get_first(activity, ["averageCadence", "avgCadence"])
+            te_aer = _get_first(activity, ["aerobicTrainingEffect", "trainingEffect", "aerobicEffect"])
+            te_ana = _get_first(activity, ["anaerobicTrainingEffect", "anaerobicEffect"])
+            training_effect_primary = _get_first(activity, ["trainingEffect"])
+            te_label = _get_first(activity, ["trainingEffectLabel"])
+            exercise_load = _get_first(activity, ["exerciseLoad"])
+            intensity_factor = _get_first(activity, ["intensityFactor", "if"])
+            tss = _get_first(activity, ["trainingStressScore", "tss"])
+            vo2 = _get_first(activity, ["vo2MaxValue", "vO2MaxValue", "vo2Max", "VO2MaxValue"])
+            intensity_minutes = _get_first(activity, ["intensityMinutes", "intensityMinutesValue"])
             if intensity_minutes is None:
-                mod = _get_any(activity, ["moderateIntensityMinutes"])
-                vig = _get_any(activity, ["vigorousIntensityMinutes"])
+                mod = _get_first(activity, ["moderateIntensityMinutes"])
+                vig = _get_first(activity, ["vigorousIntensityMinutes"])
                 try:
                     if mod is not None or vig is not None:
                         intensity_minutes = (int(mod or 0) + int(vig or 0))
@@ -237,23 +464,23 @@ def fetch_and_save_activities(client):
                 try:
                     details = client.get_activity_details(activity_id) or {}
                     if isinstance(details, dict):
-                        avg_power = avg_power if avg_power is not None else _get_any(details, ["averagePower", "avgPower"])
-                        max_power = max_power if max_power is not None else _get_any(details, ["maxPower", "maximumPower"])
-                        np_power = np_power if np_power is not None else _get_any(details, ["normalizedPower", "normPower", "normalizedPowerValue"])
-                        work_val = work_val if work_val is not None else _get_any(details, ["work", "workInJoules", "totalWork", "totalWorkInJoules"])
-                        avg_cadence = avg_cadence if avg_cadence is not None else _get_any(details, ["averageCadence", "avgCadence"])
-                        te_aer = te_aer if te_aer is not None else _get_any(details, ["aerobicTrainingEffect", "trainingEffect", "aerobicEffect"])
-                        te_ana = te_ana if te_ana is not None else _get_any(details, ["anaerobicTrainingEffect", "anaerobicEffect"])
-                        training_effect_primary = training_effect_primary if training_effect_primary is not None else _get_any(details, ["trainingEffect"])
-                        te_label = te_label if te_label is not None else _get_any(details, ["trainingEffectLabel"])
-                        exercise_load = exercise_load if exercise_load is not None else _get_any(details, ["exerciseLoad"])
-                        intensity_factor = intensity_factor if intensity_factor is not None else _get_any(details, ["intensityFactor", "if"])
-                        tss = tss if tss is not None else _get_any(details, ["trainingStressScore", "tss"])
-                        vo2 = vo2 if vo2 is not None else _get_any(details, ["vo2MaxValue", "vO2MaxValue", "vo2Max", "VO2MaxValue"])
-                        intensity_minutes = intensity_minutes if intensity_minutes is not None else _get_any(details, ["intensityMinutes", "intensityMinutesValue"])
+                        avg_power = avg_power if avg_power is not None else _get_first(details, ["averagePower", "avgPower"])
+                        max_power = max_power if max_power is not None else _get_first(details, ["maxPower", "maximumPower"])
+                        np_power = np_power if np_power is not None else _get_first(details, ["normalizedPower", "normPower", "normalizedPowerValue"])
+                        work_val = work_val if work_val is not None else _get_first(details, ["work", "workInJoules", "totalWork", "totalWorkInJoules"])
+                        avg_cadence = avg_cadence if avg_cadence is not None else _get_first(details, ["averageCadence", "avgCadence"])
+                        te_aer = te_aer if te_aer is not None else _get_first(details, ["aerobicTrainingEffect", "trainingEffect", "aerobicEffect"])
+                        te_ana = te_ana if te_ana is not None else _get_first(details, ["anaerobicTrainingEffect", "anaerobicEffect"])
+                        training_effect_primary = training_effect_primary if training_effect_primary is not None else _get_first(details, ["trainingEffect"])
+                        te_label = te_label if te_label is not None else _get_first(details, ["trainingEffectLabel"])
+                        exercise_load = exercise_load if exercise_load is not None else _get_first(details, ["exerciseLoad"])
+                        intensity_factor = intensity_factor if intensity_factor is not None else _get_first(details, ["intensityFactor", "if"])
+                        tss = tss if tss is not None else _get_first(details, ["trainingStressScore", "tss"])
+                        vo2 = vo2 if vo2 is not None else _get_first(details, ["vo2MaxValue", "vO2MaxValue", "vo2Max", "VO2MaxValue"])
+                        intensity_minutes = intensity_minutes if intensity_minutes is not None else _get_first(details, ["intensityMinutes", "intensityMinutesValue"])
                         if intensity_minutes is None:
-                            mod = _get_any(details, ["moderateIntensityMinutes"])
-                            vig = _get_any(details, ["vigorousIntensityMinutes"])
+                            mod = _get_first(details, ["moderateIntensityMinutes"])
+                            vig = _get_first(details, ["vigorousIntensityMinutes"])
                             try:
                                 if mod is not None or vig is not None:
                                     intensity_minutes = (int(mod or 0) + int(vig or 0))
@@ -282,16 +509,6 @@ def fetch_and_save_activities(client):
                     hr_zones_data = None
                 time.sleep(0.12)
 
-            def _jn(v):
-                if v is None:
-                    return None
-                try:
-                    if isinstance(v, bool):
-                        return v
-                    return float(v)
-                except Exception:
-                    return None
-
             te_main = training_effect_primary if training_effect_primary is not None else te_aer
             json_activity = {
                 "activity_id": activity_id,
@@ -303,24 +520,24 @@ def fetch_and_save_activities(client):
                 "elapsed_time_min": (float(elapsed_s) / 60.0) if elapsed_s else None,
                 "avg_speed_kmh": round(speed_kmh, 4) if speed_kmh else None,
                 "max_speed_kmh": max_speed_kmh,
-                "avg_hr": _jn(activity.get("averageHR")),
-                "max_hr": _jn(activity.get("maxHR")),
-                "avg_power_w": _jn(avg_power),
-                "max_power_w": _jn(max_power),
-                "normalized_power_w": _jn(np_power),
-                "work_kj": _jn(work_kj),
-                "avg_cadence_rpm": _jn(avg_cadence),
-                "training_effect": _jn(te_main),
-                "aerobic_training_effect": _jn(te_aer),
-                "anaerobic_training_effect": _jn(te_ana),
+                "avg_hr": _to_float(activity.get("averageHR")),
+                "max_hr": _to_float(activity.get("maxHR")),
+                "avg_power_w": _to_float(avg_power),
+                "max_power_w": _to_float(max_power),
+                "normalized_power_w": _to_float(np_power),
+                "work_kj": _to_float(work_kj),
+                "avg_cadence_rpm": _to_float(avg_cadence),
+                "training_effect": _to_float(te_main),
+                "aerobic_training_effect": _to_float(te_aer),
+                "anaerobic_training_effect": _to_float(te_ana),
                 "training_effect_label": te_label,
-                "exercise_load": _jn(exercise_load),
-                "intensity_factor": _jn(intensity_factor),
-                "training_stress_score": _jn(tss),
-                "vo2max_estimate": _jn(vo2),
-                "intensity_minutes": _jn(intensity_minutes),
-                "calories": _jn(activity.get("calories")),
-                "elevation_gain": _jn(activity.get("elevationGain")),
+                "exercise_load": _to_float(exercise_load),
+                "intensity_factor": _to_float(intensity_factor),
+                "training_stress_score": _to_float(tss),
+                "vo2max_estimate": _to_float(vo2),
+                "intensity_minutes": _to_float(intensity_minutes),
+                "calories": _to_float(activity.get("calories")),
+                "elevation_gain": _to_float(activity.get("elevationGain")),
                 "hr_zones": hr_zones_data,
             }
             existing_fitness_json[activity_id] = json_activity
@@ -328,20 +545,20 @@ def fetch_and_save_activities(client):
             if activity_id and activity_id not in ids_before:
                 new_count += 1
 
-        if existing_fitness_json:
-            sorted_activities = sorted(
-                existing_fitness_json.values(),
-                key=lambda x: (x.get("date") or "", x.get("activity_id") or ""),
-            )
-            _write_json_export(
-                JSON_FITNESS,
-                {
-                    "schema_version": 1,
-                    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "source": "garmin-connector",
-                    "activities": sorted_activities,
-                },
-            )
+        sorted_activities = sorted(
+            existing_fitness_json.values(),
+            key=lambda x: (x.get("date") or "", x.get("activity_id") or ""),
+        )
+        _write_json_export(
+            JSON_FITNESS,
+            {
+                "schema_version": FITNESS_SCHEMA_VERSION,
+                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "source": "garmin-connector",
+                "athlete": athlete,
+                "activities": sorted_activities,
+            },
+        )
 
         print(f"✅ Fitness data secured! ({new_count} new activities)")
         return True
@@ -364,20 +581,6 @@ def fetch_and_save_health(client):
     delay = 0.5 if days_to_fetch > 30 else 0
 
     success_count = 0
-
-    def _get_any(d: dict, keys: list[str]):
-        for k in keys:
-            if k in d and d.get(k) is not None:
-                return d.get(k)
-        return None
-
-    def _jn_h(v):
-        if v is None:
-            return None
-        try:
-            return float(v)
-        except Exception:
-            return None
 
     while current_date <= today:
         target_date = current_date.isoformat()
@@ -405,48 +608,48 @@ def fetch_and_save_health(client):
                 sleep_time_seconds = sleep_dto.get("sleepTimeSeconds") or 0
                 sleep_hours = round(sleep_time_seconds / 3600.0, 4)
 
-                sleep_start_local = _get_any(sleep_dto, ["sleepStartTimestampLocal", "sleepStartTimeLocal"])
-                sleep_end_local = _get_any(sleep_dto, ["sleepEndTimestampLocal", "sleepEndTimeLocal"])
+                sleep_start_local = _get_first(sleep_dto, ["sleepStartTimestampLocal", "sleepStartTimeLocal"])
+                sleep_end_local = _get_first(sleep_dto, ["sleepEndTimestampLocal", "sleepEndTimeLocal"])
 
                 if "sleepScores" in sleep_dto and "overall" in sleep_dto["sleepScores"]:
                     v = sleep_dto["sleepScores"]["overall"].get("value")
-                    sleep_score = _jn_h(v)
+                    sleep_score = _to_float(v)
                 elif "sleepScore" in sleep_dto:
                     score_data = sleep_dto["sleepScore"]
-                    sleep_score = _jn_h(score_data.get("value")) if isinstance(score_data, dict) else _jn_h(score_data)
+                    sleep_score = _to_float(score_data.get("value")) if isinstance(score_data, dict) else _to_float(score_data)
 
-            intensity_minutes = _get_any(stats, ["intensityMinutes", "intensityMinutesValue"])
+            intensity_minutes = _get_first(stats, ["intensityMinutes", "intensityMinutesValue"])
             if intensity_minutes is None:
-                mod = _get_any(stats, ["moderateIntensityMinutes"])
-                vig = _get_any(stats, ["vigorousIntensityMinutes"])
+                mod = _get_first(stats, ["moderateIntensityMinutes"])
+                vig = _get_first(stats, ["vigorousIntensityMinutes"])
                 try:
                     if mod is not None or vig is not None:
                         intensity_minutes = int(mod or 0) + int(vig or 0)
                 except Exception:
                     pass
 
-            active_cal = _get_any(stats, ["activeKilocalories", "activeCalories"])
-            total_cal = _get_any(stats, ["totalKilocalories", "totalCalories", "burnedKilocalories"])
-            max_stress = _get_any(stats, ["maxStressLevel", "maxStress"])
-            bb_high = _get_any(stats, ["bodyBatteryHighestValue", "bodyBatteryHigh", "bodyBatteryMax", "bodyBatteryHighest"])
-            bb_low = _get_any(stats, ["bodyBatteryLowestValue", "bodyBatteryLow", "bodyBatteryMin", "bodyBatteryLowest"])
+            active_cal = _get_first(stats, ["activeKilocalories", "activeCalories"])
+            total_cal = _get_first(stats, ["totalKilocalories", "totalCalories", "burnedKilocalories"])
+            max_stress = _get_first(stats, ["maxStressLevel", "maxStress"])
+            bb_high = _get_first(stats, ["bodyBatteryHighestValue", "bodyBatteryHigh", "bodyBatteryMax", "bodyBatteryHighest"])
+            bb_low = _get_first(stats, ["bodyBatteryLowestValue", "bodyBatteryLow", "bodyBatteryMin", "bodyBatteryLowest"])
 
             day_record = {
                 "date": target_date,
                 "resting_hr": int(stats["restingHeartRate"]) if stats.get("restingHeartRate") is not None else None,
                 "avg_hrv": hrv_avg,
-                "avg_stress": _jn_h(stats.get("averageStressLevel")),
-                "max_stress": _jn_h(max_stress),
-                "body_battery_high": _jn_h(bb_high),
-                "body_battery_low": _jn_h(bb_low),
+                "avg_stress": _to_float(stats.get("averageStressLevel")),
+                "max_stress": _to_float(max_stress),
+                "body_battery_high": _to_float(bb_high),
+                "body_battery_low": _to_float(bb_low),
                 "sleep_hours": sleep_hours,
                 "sleep_start_local": sleep_start_local,
                 "sleep_end_local": sleep_end_local,
                 "sleep_score": sleep_score,
                 "steps": int(stats["totalSteps"]) if stats.get("totalSteps") is not None else None,
-                "intensity_minutes": _jn_h(intensity_minutes),
-                "active_calories": _jn_h(active_cal),
-                "total_calories": _jn_h(total_cal),
+                "intensity_minutes": _to_float(intensity_minutes),
+                "active_calories": _to_float(active_cal),
+                "total_calories": _to_float(total_cal),
             }
             existing_health_json[target_date] = day_record
             success_count += 1
@@ -567,7 +770,7 @@ def job():
     """This function runs every 2 hours."""
     # Check night mode (22:00 - 06:00)
     current_hour = time.localtime().tm_hour
-    if 23 <= current_hour or current_hour < 6:
+    if 22 <= current_hour or current_hour < 6:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 💤 Night mode (22:00-06:00). Sync skipped.")
         return
 

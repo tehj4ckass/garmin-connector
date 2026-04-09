@@ -47,7 +47,7 @@ The container stays active in the background and performs the sync every 2 hours
 
 ### JSON files
 
-- **`fitness_data.json`:** Top-level object with `activities` (array). Each activity includes identifiers, date, type, distances, durations, speeds, heart rate, power, training metrics, calories, elevation, and optional `hr_zones`.
+- **`fitness_data.json`:** `schema_version` 2 — enthält `athlete` (aktueller Snapshot: u. a. VO₂max Laufen/Radfahren, HR-Zonen, Alter/Gewicht/Größe, Fitnessalter, Ruhepuls, Laktat-Schwellen-HF, Rad-FTP, `fetched_at`) sowie `activities` wie zuvor.
 - **`health_data.json`:** Top-level object with `days` (array). Each day includes date, resting HR, HRV, stress, body battery, sleep fields, steps, intensity minutes, and calories.
 
 Both files include `schema_version`, `generated_at`, and `source` metadata for tooling.
