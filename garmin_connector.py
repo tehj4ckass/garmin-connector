@@ -37,11 +37,78 @@ FITNESS_SCHEMA_VERSION = 2
 INITIAL_SYNC_DAYS = int(os.getenv("INITIAL_SYNC_DAYS", 365)) # How many days to fetch if no file exists
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
+LOGIN_STATE_FILE = "garmin_login_state.json"
+MAX_LOGIN_ATTEMPTS_PER_DAY = int(os.getenv("MAX_LOGIN_ATTEMPTS_PER_DAY", "4"))
+SCHEDULE_TIMES = [t.strip() for t in os.getenv("SYNC_TIMES", "08:00,12:00,16:00,20:00").split(",") if t.strip()]
+SCHEDULE_JITTER_MAX_MIN = int(os.getenv("SCHEDULE_JITTER_MAX_MIN", "12"))
 
 
 def _write_json_export(path: str, payload: dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False, default=str)
+
+
+def _load_login_state() -> dict:
+    if not os.path.exists(LOGIN_STATE_FILE):
+        return {"attempts": [], "blocked_until": 0, "consecutive_429": 0}
+    try:
+        with open(LOGIN_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return {
+                "attempts": data.get("attempts", []),
+                "blocked_until": int(data.get("blocked_until", 0) or 0),
+                "consecutive_429": int(data.get("consecutive_429", 0) or 0),
+            }
+    except Exception:
+        return {"attempts": [], "blocked_until": 0, "consecutive_429": 0}
+
+
+def _save_login_state(state: dict) -> None:
+    safe_state = {
+        "attempts": state.get("attempts", []),
+        "blocked_until": int(state.get("blocked_until", 0) or 0),
+        "consecutive_429": int(state.get("consecutive_429", 0) or 0),
+    }
+    with open(LOGIN_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(safe_state, f, indent=2)
+
+
+def _record_login_attempt(state: dict) -> None:
+    now = int(time.time())
+    cutoff = now - (24 * 3600)
+    attempts = [int(ts) for ts in state.get("attempts", []) if int(ts) >= cutoff]
+    attempts.append(now)
+    state["attempts"] = attempts
+
+
+def _apply_429_cooldown(state: dict) -> None:
+    # Escalating cooldown windows to avoid repeating bot-like login bursts.
+    cooldown_steps_min = [15, 45, 120, 360]
+    next_429_count = int(state.get("consecutive_429", 0) or 0) + 1
+    idx = min(next_429_count - 1, len(cooldown_steps_min) - 1)
+    wait_min = cooldown_steps_min[idx]
+    jitter_s = random.randint(15, 180)
+    blocked_until = int(time.time()) + (wait_min * 60) + jitter_s
+    state["consecutive_429"] = next_429_count
+    state["blocked_until"] = blocked_until
+    _save_login_state(state)
+    print(f"⏳ Garmin rate-limited (429). Login blocked for ~{wait_min} minutes (+ jitter).")
+
+
+def _clear_429_cooldown(state: dict) -> None:
+    state["blocked_until"] = 0
+    state["consecutive_429"] = 0
+    _save_login_state(state)
+
+
+def _apply_schedule_jitter() -> None:
+    if SCHEDULE_JITTER_MAX_MIN <= 0:
+        return
+    wait_seconds = random.randint(0, SCHEDULE_JITTER_MAX_MIN * 60)
+    if wait_seconds <= 0:
+        return
+    print(f"⏱️ Schedule jitter: waiting {wait_seconds // 60}m {wait_seconds % 60}s before sync...")
+    time.sleep(wait_seconds)
 
 
 def _load_fitness_json_by_id() -> dict:
@@ -131,18 +198,10 @@ def _to_float(v):
 # --- PART 1: GARMIN LOGIC ---
 def init_garmin():
     client = Garmin(EMAIL, PASSWORD)
+    login_state = _load_login_state()
     def _is_rate_limit_error(err: Exception) -> bool:
         msg = str(err)
         return ("429" in msg) or ("Too Many Requests" in msg)
-
-    def _sleep_backoff(attempt: int) -> None:
-        # Longer exponential backoff: 5min, 15min, 30min (Garmin needs more breathing room)
-        base_minutes = 5 * (3 ** attempt)  # 5, 15, 45 minutes
-        jitter = random.randint(0, 120)  # Up to 2 min jitter
-        wait_s = (base_minutes * 60) + jitter
-        wait_min = wait_s // 60
-        print(f"⏳ Garmin rate-limited (429). Waiting {wait_min} minutes before retry...")
-        time.sleep(wait_s)
 
     # Important: never do two immediate login attempts back-to-back.
     # Strategy:
@@ -150,6 +209,13 @@ def init_garmin():
     # 2) Only if that fails, attempt an interactive login (with backoff on 429).
     tokens_loaded = False
     print(f"🔐 Garmin token path: {TOKEN_DIR}")
+    now_ts = int(time.time())
+    blocked_until = int(login_state.get("blocked_until", 0) or 0)
+    if blocked_until > now_ts:
+        remaining_s = blocked_until - now_ts
+        print(f"⛔ Login cooldown active for {remaining_s // 60}m {remaining_s % 60}s. Skipping login attempt.")
+        return None
+
     if os.path.exists(TOKEN_DIR):
         try:
             client.garth.load(TOKEN_DIR)
@@ -170,25 +236,31 @@ def init_garmin():
         except Exception as e:
             if _is_rate_limit_error(e):
                 print(f"❌ Garmin rate-limited (429) even when using stored tokens: {str(e)[:200]}")
+                _apply_429_cooldown(login_state)
                 return None
             # Otherwise fall through to a real login attempt.
     else:
         print("ℹ️ No stored Garmin tokens found. Interactive login required.")
 
-    max_retries = 2  # only 1 retry after initial attempt
-    for attempt in range(max_retries):
-        try:
-            client.login()
-            os.makedirs(TOKEN_DIR, exist_ok=True)
-            client.garth.dump(TOKEN_DIR)
-            return client
-        except Exception as e:
-            if _is_rate_limit_error(e) and attempt < (max_retries - 1):
-                _sleep_backoff(attempt)
-                continue
-            suffix = " (tokens loaded but unusable)" if tokens_loaded else ""
-            print(f"❌ Garmin Login failed{suffix} (will not retry): {str(e)[:200]}")
-            return None
+    _record_login_attempt(login_state)
+    if len(login_state.get("attempts", [])) > MAX_LOGIN_ATTEMPTS_PER_DAY:
+        _save_login_state(login_state)
+        print(f"⛔ Daily login attempt limit reached ({MAX_LOGIN_ATTEMPTS_PER_DAY}/24h). Skipping login.")
+        return None
+    _save_login_state(login_state)
+
+    try:
+        client.login()
+        os.makedirs(TOKEN_DIR, exist_ok=True)
+        client.garth.dump(TOKEN_DIR)
+        _clear_429_cooldown(login_state)
+        return client
+    except Exception as e:
+        if _is_rate_limit_error(e):
+            _apply_429_cooldown(login_state)
+        suffix = " (tokens loaded but unusable)" if tokens_loaded else ""
+        print(f"❌ Garmin Login failed{suffix} (will not retry): {str(e)[:200]}")
+        return None
 
 
 def fetch_athlete_snapshot(client) -> dict:
@@ -771,16 +843,18 @@ def upload_to_drive(filename):
         print(f"❌ Error uploading {filename}: {e}")
 
 # --- MAIN PROGRAM ---
-def job():
-    """This function runs every 2 hours."""
+def job(force_run: bool = False):
+    """Runs at configured daily schedule times."""
     # Check night mode (22:00 - 06:00)
     current_hour = time.localtime().tm_hour
-    if 22 <= current_hour or current_hour < 6:
+    if (22 <= current_hour or current_hour < 6) and not force_run:
         print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 💤 Night mode (22:00-06:00). Sync skipped.")
         return
 
     print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] ⏰ Starting scheduled data sync...")
     try:
+        if not force_run:
+            _apply_schedule_jitter()
         client = init_garmin()
         if client:
             fitness_success = fetch_and_save_activities(client)
@@ -793,9 +867,6 @@ def job():
                 upload_to_drive(JSON_HEALTH)
             print("🎉 All systems up to date!")
             
-            # Calculate next run (current time + 2 hours)
-            next_run_time = time.strftime('%H:%M:%S', time.localtime(time.time() + 7200))
-            print(f"🕒 Next sync scheduled for approx. {next_run_time} (if not in night mode).")
         else:
             print("❌ Sync failed: Garmin login failed.")
     except Exception as e:
@@ -803,15 +874,19 @@ def job():
 
 if __name__ == "__main__":
     print("🚀 Garmin AI Coach Container started!")
-    
-    # 1. Run once immediately on container start
-    job()
-    
-    # 2. Set schedule (every 2 hours)
-    schedule.every(2).hours.do(job)
-    print("\n⏳ Scheduler active. Waiting for next cycle (in 2 hours, skipping 22:00-06:00)...")
-    
-    # 3. Main loop to keep container alive
+    run_now_arg = any(arg in ("--run-now", "--force-sync-now") for arg in sys.argv[1:])
+    run_now_env = os.getenv("FORCE_SYNC_ON_START", "").strip().lower() in ("1", "true", "yes", "on")
+    run_now = run_now_arg or run_now_env
+    if run_now:
+        print("⚡ Force sync on startup requested (--run-now / FORCE_SYNC_ON_START). Running one immediate sync...")
+        job(force_run=True)
+
+    # Set fixed run times to reduce bot-like periodic traffic patterns.
+    for run_at in SCHEDULE_TIMES:
+        schedule.every().day.at(run_at).do(job)
+    print(f"\n⏳ Scheduler active. Daily sync times: {', '.join(SCHEDULE_TIMES)} (local time).")
+
+    # Main loop to keep container alive
     while True:
         schedule.run_pending()
         time.sleep(30) # Check every 30 seconds if it's time to run again
