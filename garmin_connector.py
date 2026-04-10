@@ -28,7 +28,8 @@ except Exception:
 load_dotenv()
 EMAIL = os.getenv("GARMIN_EMAIL")
 PASSWORD = os.getenv("GARMIN_PASSWORD")
-TOKEN_DIR = "./garmin_tokens"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TOKEN_DIR = os.getenv("GARMIN_TOKEN_DIR", os.path.join(BASE_DIR, "garmin_tokens"))
 
 JSON_FITNESS = "fitness_data.json"
 JSON_HEALTH = "health_data.json"
@@ -148,10 +149,12 @@ def init_garmin():
     # 1) If stored tokens exist, try to use them WITHOUT triggering SSO login.
     # 2) Only if that fails, attempt an interactive login (with backoff on 429).
     tokens_loaded = False
+    print(f"🔐 Garmin token path: {TOKEN_DIR}")
     if os.path.exists(TOKEN_DIR):
         try:
             client.garth.load(TOKEN_DIR)
             tokens_loaded = True
+            print("✅ Stored Garmin tokens loaded. Trying token-based auth first...")
             # Ensure display_name is set; otherwise endpoints like user summary hit ".../daily/None" -> 403.
             try:
                 settings = client.get_userprofile_settings()
@@ -169,6 +172,8 @@ def init_garmin():
                 print(f"❌ Garmin rate-limited (429) even when using stored tokens: {str(e)[:200]}")
                 return None
             # Otherwise fall through to a real login attempt.
+    else:
+        print("ℹ️ No stored Garmin tokens found. Interactive login required.")
 
     max_retries = 2  # only 1 retry after initial attempt
     for attempt in range(max_retries):
