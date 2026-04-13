@@ -6,4 +6,5 @@ google-auth-oauthlib
 schedule
 pandas
 plotly
+statsmodels
 streamlit
