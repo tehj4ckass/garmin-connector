@@ -1,15 +1,15 @@
-# Wir nutzen eine schlanke Python-Version
+# Use a slim Python base image
 FROM python:3.11-slim
 
-# Setze das Arbeitsverzeichnis im Container
+# Set the working directory
 WORKDIR /app
 
-# Kopiere die requirements.txt und installiere die Pakete
+# Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Kopiere alle anderen Dateien ins Arbeitsverzeichnis
+# Copy the rest of the project files
 COPY . .
 
-# Führe das Skript aus (-u sorgt dafür, dass wir die Print-Ausgaben direkt im Docker-Log sehen)
+# Default command for connector container
 CMD ["python", "-u", "garmin_connector.py"]

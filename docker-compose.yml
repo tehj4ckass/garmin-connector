@@ -4,7 +4,16 @@ services:
     container_name: garmin-connector
     restart: unless-stopped
     volumes:
-      # Hiermit verknüpfen wir den Ordner auf dem Pi (links) 
-      # mit dem Arbeitsordner im Container (rechts). 
-      # So bleiben JSON-Exporte und Tokens auch nach einem Neustart erhalten!
+      # Persist JSON exports and OAuth tokens on host.
       - .:/app
+  dashboard:
+    build: .
+    container_name: garmin-dashboard
+    restart: unless-stopped
+    command: streamlit run dashboard/app.py --server.address=0.0.0.0 --server.port=8501
+    environment:
+      - DASHBOARD_DATA_DIR=/app
+    volumes:
+      - .:/app
+    ports:
+      - "8501:8501"

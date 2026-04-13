@@ -3,6 +3,7 @@ import json
 import time
 import random
 import sys
+import logging
 import schedule
 from datetime import date, timedelta
 from dotenv import load_dotenv
@@ -38,9 +39,13 @@ INITIAL_SYNC_DAYS = int(os.getenv("INITIAL_SYNC_DAYS", 365)) # How many days to 
 
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 LOGIN_STATE_FILE = "garmin_login_state.json"
-MAX_LOGIN_ATTEMPTS_PER_DAY = int(os.getenv("MAX_LOGIN_ATTEMPTS_PER_DAY", "4"))
+MAX_LOGIN_ATTEMPTS_PER_DAY = int(os.getenv("MAX_LOGIN_ATTEMPTS_PER_DAY", "20"))
 SCHEDULE_TIMES = [t.strip() for t in os.getenv("SYNC_TIMES", "08:00,12:00,16:00,20:00").split(",") if t.strip()]
 SCHEDULE_JITTER_MAX_MIN = int(os.getenv("SCHEDULE_JITTER_MAX_MIN", "12"))
+
+# Reduce noisy traceback logs from transient auth checks in upstream library.
+logging.getLogger("garminconnect").setLevel(logging.ERROR)
+logging.getLogger("garminconnect").disabled = True
 
 
 def _write_json_export(path: str, payload: dict) -> None:
@@ -197,11 +202,80 @@ def _to_float(v):
 
 # --- PART 1: GARMIN LOGIC ---
 def init_garmin():
-    client = Garmin(EMAIL, PASSWORD)
+    def _prompt_mfa_code() -> str:
+        # Optional non-interactive MFA support via env var.
+        env_code = os.getenv("GARMIN_MFA_CODE", "").strip()
+        if env_code:
+            return env_code
+        return input("Garmin MFA code: ").strip()
+
+    client = Garmin(EMAIL, PASSWORD, prompt_mfa=_prompt_mfa_code)
     login_state = _load_login_state()
+    token_auth_failed_non_rate_limit = False
+    ignore_cooldown_once = os.getenv("GARMIN_IGNORE_COOLDOWN_ONCE", "").strip().lower() in ("1", "true", "yes", "on")
+
+    def _ensure_compatible_tokenstore() -> str:
+        """Migrate legacy oauth token files to the new garmin_tokens.json format when needed."""
+        token_json_path = os.path.join(TOKEN_DIR, "garmin_tokens.json")
+        legacy_oauth2_path = os.path.join(TOKEN_DIR, "oauth2_token.json")
+        if os.path.exists(token_json_path):
+            return "existing_garmin_tokens_json"
+        if not os.path.exists(legacy_oauth2_path):
+            return "missing_all_known_token_files"
+        try:
+            with open(legacy_oauth2_path, "r", encoding="utf-8") as f:
+                legacy = json.load(f)
+            migrated = {
+                "di_token": legacy.get("access_token"),
+                "di_refresh_token": legacy.get("refresh_token"),
+                # Default client id used by garminconnect client as compatibility baseline.
+                "di_client_id": "GARMIN_CONNECT_MOBILE_ANDROID_DI",
+            }
+            if not migrated["di_token"] or not migrated["di_refresh_token"]:
+                return "legacy_oauth2_missing_required_fields"
+            os.makedirs(TOKEN_DIR, exist_ok=True)
+            with open(token_json_path, "w", encoding="utf-8") as f:
+                json.dump(migrated, f, ensure_ascii=False)
+            return "migrated_from_oauth2_token_json"
+        except Exception as e:
+            return f"migration_failed:{type(e).__name__}"
+
+    def _token_load() -> str:
+        # Compatibility: older garminconnect exposed `garth`, newer exposes `client.load`.
+        if hasattr(client, "garth") and hasattr(client.garth, "load"):
+            client.garth.load(TOKEN_DIR)
+            return "garth.load"
+        if hasattr(client, "client") and hasattr(client.client, "load"):
+            client.client.load(TOKEN_DIR)
+            return "client.load"
+        raise RuntimeError("No compatible Garmin token load method available")
+
     def _is_rate_limit_error(err: Exception) -> bool:
         msg = str(err)
         return ("429" in msg) or ("Too Many Requests" in msg)
+
+    def _hydrate_display_name() -> bool:
+        if getattr(client, "display_name", None):
+            return True
+        try:
+            profile = client.get_user_profile()
+            if isinstance(profile, dict):
+                dn = profile.get("displayName")
+                if dn:
+                    client.display_name = dn
+                    return True
+        except Exception:
+            pass
+        try:
+            social = client.connectapi("/userprofile-service/socialProfile")
+            if isinstance(social, dict):
+                dn = social.get("displayName")
+                if dn:
+                    client.display_name = dn
+                    return True
+        except Exception:
+            pass
+        return bool(getattr(client, "display_name", None))
 
     # Important: never do two immediate login attempts back-to-back.
     # Strategy:
@@ -211,29 +285,20 @@ def init_garmin():
     print(f"🔐 Garmin token path: {TOKEN_DIR}")
     now_ts = int(time.time())
     blocked_until = int(login_state.get("blocked_until", 0) or 0)
-    if blocked_until > now_ts:
-        remaining_s = blocked_until - now_ts
-        print(f"⛔ Login cooldown active for {remaining_s // 60}m {remaining_s % 60}s. Skipping login attempt.")
-        return None
+    cooldown_active = blocked_until > now_ts
 
     if os.path.exists(TOKEN_DIR):
         try:
-            client.garth.load(TOKEN_DIR)
+            _ensure_compatible_tokenstore()
+            _token_load()
             tokens_loaded = True
             print("✅ Stored Garmin tokens loaded. Trying token-based auth first...")
-            # Ensure display_name is set; otherwise endpoints like user summary hit ".../daily/None" -> 403.
-            try:
-                settings = client.get_userprofile_settings()
-                display_name = settings.get("displayName") if isinstance(settings, dict) else None
-                if display_name:
-                    client.display_name = display_name
-            except Exception:
-                pass
-
             # Lightweight "am I authenticated?" call. Should not require SSO widget login.
             client.get_user_profile()
+            _hydrate_display_name()
             return client
         except Exception as e:
+            token_auth_failed_non_rate_limit = not _is_rate_limit_error(e)
             if _is_rate_limit_error(e):
                 print(f"❌ Garmin rate-limited (429) even when using stored tokens: {str(e)[:200]}")
                 _apply_429_cooldown(login_state)
@@ -241,6 +306,32 @@ def init_garmin():
             # Otherwise fall through to a real login attempt.
     else:
         print("ℹ️ No stored Garmin tokens found. Interactive login required.")
+
+    if cooldown_active:
+        remaining_s = blocked_until - now_ts
+        if ignore_cooldown_once:
+            print(
+                f"⚠️ GARMIN_IGNORE_COOLDOWN_ONCE=1 set. Bypassing cooldown "
+                f"({remaining_s // 60}m {remaining_s % 60}s) for this run."
+            )
+        else:
+            if token_auth_failed_non_rate_limit:
+                print(
+                    f"⛔ Login cooldown active for {remaining_s // 60}m {remaining_s % 60}s. "
+                    "Stored tokens were rejected; waiting for cooldown before next interactive login attempt."
+                )
+            else:
+                print(f"⛔ Login cooldown active for {remaining_s // 60}m {remaining_s % 60}s. Skipping interactive login attempt.")
+            return None
+
+    if token_auth_failed_non_rate_limit:
+        token_json_path = os.path.join(TOKEN_DIR, "garmin_tokens.json")
+        if os.path.exists(token_json_path):
+            try:
+                os.remove(token_json_path)
+                print("♻️ Removed invalid Garmin token store before interactive login retry.")
+            except Exception as e:
+                print(f"⚠️ Could not remove stale Garmin token store: {str(e)[:160]}")
 
     _record_login_attempt(login_state)
     if len(login_state.get("attempts", [])) > MAX_LOGIN_ATTEMPTS_PER_DAY:
@@ -250,9 +341,11 @@ def init_garmin():
     _save_login_state(login_state)
 
     try:
-        client.login()
         os.makedirs(TOKEN_DIR, exist_ok=True)
-        client.garth.dump(TOKEN_DIR)
+        # garminconnect>=0.3.x handles token load/refresh/write via tokenstore path.
+        client.login(str(TOKEN_DIR))
+        _hydrate_display_name()
+        os.makedirs(TOKEN_DIR, exist_ok=True)
         _clear_429_cooldown(login_state)
         return client
     except Exception as e:
@@ -829,7 +922,8 @@ def upload_to_drive(filename):
                 media_body=media,
                 fields='id, name, webViewLink'
             ).execute()
-            print(f"☁️ Created: id={created.get('id')} link={created.get('webViewLink')}")
+            link = (created.get("webViewLink") or "").replace("/vieew?", "/view?")
+            print(f"☁️ Created: id={created.get('id')} link={link}")
         else:
             file_id = files[0].get('id')
             print(f"☁️ Updating file '{filename}' in Drive root... (id={file_id})")
@@ -838,7 +932,8 @@ def upload_to_drive(filename):
                 media_body=media,
                 fields='id, name, webViewLink'
             ).execute()
-            print(f"☁️ Updated: id={updated.get('id')} link={updated.get('webViewLink')}")
+            link = (updated.get("webViewLink") or "").replace("/vieew?", "/view?")
+            print(f"☁️ Updated: id={updated.get('id')} link={link}")
     except Exception as e:
         print(f"❌ Error uploading {filename}: {e}")
 

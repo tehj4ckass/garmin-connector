@@ -11,6 +11,7 @@ This tool automates the export of your Garmin fitness and health data into JSON 
 - **Cloud Connectivity:** Automatic upload and update of files in Google Drive.
 - **Automation:** Runs by default every 2 hours as a background process.
 - **Docker-Ready:** Easy deployment via Docker and Docker Compose.
+- **Dashboard-Ready:** Includes a Streamlit dashboard service for interactive analysis.
 
 ## 🛠 Setup
 
@@ -37,7 +38,29 @@ The easiest way is using Docker Compose:
 docker-compose up -d
 ```
 
-The container stays active in the background and performs the sync every 2 hours.
+The stack starts two services:
+- `garmin-connector`: keeps syncing Garmin exports every 2 hours.
+- `dashboard`: serves a Streamlit dashboard on port `8501`.
+
+Open the dashboard in your browser:
+
+`http://<your-pi-ip>:8501`
+
+## 🧪 Local Dashboard Run (venv)
+
+If you want to test the dashboard locally before or without Docker:
+
+```bash
+pip install -r requirements.txt
+streamlit run dashboard/app.py
+```
+
+Optional: point the dashboard to another folder containing `fitness_data.json` and `health_data.json`:
+
+```bash
+export DASHBOARD_DATA_DIR=/path/to/data
+streamlit run dashboard/app.py
+```
 
 ## 📂 File Structure & JSON export
 
