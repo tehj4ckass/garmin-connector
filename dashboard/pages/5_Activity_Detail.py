@@ -4,10 +4,11 @@ import sys
 import math
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from dashboard_data import apply_filters, build_sidebar_filters, load_context
+from dashboard_data import apply_filters, build_sidebar_filters, load_context, inject_custom_css, apply_premium_theme
 
 
 st.set_page_config(page_title="Activity Detail", page_icon="🔍", layout="wide")
+inject_custom_css()
 st.title("🔍 Activity Detail")
 
 ctx = load_context()

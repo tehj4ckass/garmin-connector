@@ -1,0 +1,11 @@
+[theme]
+# Primary accent color (e.g., vibrant Garmin Blue)
+primaryColor = "#00CCFF"
+# Background color for the main content area
+backgroundColor = "#0E1117"
+# Background color for the sidebar
+secondaryBackgroundColor = "#1E293B"
+# Text color
+textColor = "#F8FAFC"
+# Font style
+font = "sans serif"

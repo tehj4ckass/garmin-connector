@@ -1,0 +1,48 @@
+/* Premium Dark Mode Overrides */
+
+/* Hide clutter */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+
+/* Sleeker Metric Cards */
+div[data-testid="metric-container"] {
+    background-color: rgba(30, 41, 59, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 15px 20px;
+    border-radius: 12px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+
+div[data-testid="metric-container"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+    border-color: rgba(0, 204, 255, 0.3);
+}
+
+/* Make Tabs look more like modern buttons */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+    background-color: transparent;
+}
+
+.stTabs [data-baseweb="tab"] {
+    height: 40px;
+    white-space: pre-wrap;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 8px 8px 0 0;
+    padding: 10px 20px;
+}
+
+.stTabs [aria-selected="true"] {
+    background-color: rgba(0, 204, 255, 0.1) !important;
+    border-bottom: 2px solid #00CCFF !important;
+}
+
+/* Improve Expander Design */
+.streamlit-expanderHeader {
+    font-weight: 600 !important;
+    font-size: 1.05rem !important;
+    border-radius: 8px !important;
+}

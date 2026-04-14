@@ -220,6 +220,8 @@ def activity_types(ctx: DashboardContext) -> list[str]:
     return sorted(ctx.activities["activity_type"].dropna().astype(str).unique().tolist())
 
 
+from datetime import timedelta
+
 def build_sidebar_filters(ctx: DashboardContext, *, key_prefix: str = ""):
     dates = all_dates(ctx)
     if not dates:
@@ -227,10 +229,11 @@ def build_sidebar_filters(ctx: DashboardContext, *, key_prefix: str = ""):
 
     min_date = min(dates)
     max_date = max(dates)
+    default_start = max(min_date, max_date - timedelta(days=30))
 
     date_range = st.sidebar.date_input(
-        "Date range",
-        value=(min_date, max_date),
+        "Zeitraum",
+        value=(default_start, max_date),
         min_value=min_date,
         max_value=max_date,
         key=f"{key_prefix}date_range",
@@ -238,7 +241,7 @@ def build_sidebar_filters(ctx: DashboardContext, *, key_prefix: str = ""):
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_date, end_date = date_range
     else:
-        start_date, end_date = min_date, max_date
+        start_date, end_date = default_start, max_date
 
     types = activity_types(ctx)
     selected_types = st.sidebar.multiselect(
@@ -270,3 +273,64 @@ def load_context() -> DashboardContext:
         daily_training=daily_training,
         merged_daily=merged_daily,
     )
+
+
+def inject_custom_css():
+    css_path = Path(__file__).parent / "style.css"
+    if css_path.exists():
+        with open(css_path, "r", encoding="utf-8") as f:
+            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+
+def apply_premium_theme(fig, graph_type="line"):
+    """Applies modern dark-mode formatting to Plotly figures."""
+    
+    # 1. Füge sichtbare Punkte ("markers") und die echten Zahlenwerte ("text") hinzu
+    if graph_type == "line":
+        fig.update_traces(
+            mode="lines+markers+text",
+            texttemplate="%{y:.0f}",
+            textposition="top center",
+            marker=dict(size=8),
+            selector=dict(type="scatter", mode="lines") # Only target lines
+        )
+        # Ensure we also hit default px.line which may lack explicit mode
+        for trace in fig.data:
+            if trace.type == 'scatter' and (trace.mode == 'lines' or trace.mode is None):
+                trace.mode = 'lines+markers+text'
+                trace.texttemplate = '%{y:.0f}'
+                trace.textposition = 'top center'
+                trace.marker.size = 8
+    
+    elif graph_type == "bar":
+        fig.update_traces(
+            texttemplate="%{y:.0f}",
+            textposition="outside",
+            selector=dict(type="bar")
+        )
+    elif graph_type == "scatter":
+        fig.update_traces(
+            mode="markers+text",
+            texttemplate="%{y:.0f}",
+            textposition="top center",
+            marker=dict(size=8),
+            selector=dict(type="scatter")
+        )
+
+    # 2. Übriges Design (Dark-Mode, Fonts...)
+    fig.update_layout(
+        template="plotly_dark",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(t=50, l=10, r=10, b=10),
+        font=dict(family="sans serif", size=12, color="#E2E8F0"),
+        hoverlabel=dict(
+            bgcolor="#1E293B",
+            font_size=13,
+            font_family="sans serif"
+        )
+    )
+    # Refine grid visibility for sleeker look
+    fig.update_xaxes(showgrid=False, tickformat="%d.%m.")
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.05)")
+    return fig

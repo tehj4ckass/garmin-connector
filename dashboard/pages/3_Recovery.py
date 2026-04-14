@@ -4,10 +4,11 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from dashboard_data import apply_filters, build_sidebar_filters, load_context
+from dashboard_data import apply_filters, build_sidebar_filters, load_context, inject_custom_css, apply_premium_theme
 
 
 st.set_page_config(page_title="Recovery", page_icon="😴", layout="wide")
+inject_custom_css()
 st.title("😴 Recovery")
 
 ctx = load_context()
@@ -28,6 +29,7 @@ col4.metric("Avg Recovery", f"{fctx.days['recovery_score'].mean() if 'recovery_s
 
 trend_cols = [c for c in ["sleep_hours", "sleep_score", "avg_hrv", "resting_hr", "avg_stress", "recovery_score"] if c in fctx.days.columns]
 fig_recovery = px.line(fctx.days, x="date", y=trend_cols, title="Recovery Trends")
+fig_recovery = apply_premium_theme(fig_recovery, graph_type="line")
 st.plotly_chart(fig_recovery, use_container_width=True)
 
 if {"body_battery_high", "body_battery_low"}.issubset(fctx.days.columns):
@@ -37,6 +39,7 @@ if {"body_battery_high", "body_battery_low"}.issubset(fctx.days.columns):
         y=["body_battery_high", "body_battery_low"],
         title="Body Battery High/Low",
     )
+    fig_bb = apply_premium_theme(fig_bb, graph_type="line")
     st.plotly_chart(fig_bb, use_container_width=True)
 
 st.dataframe(fctx.days.sort_values("date", ascending=False), use_container_width=True)

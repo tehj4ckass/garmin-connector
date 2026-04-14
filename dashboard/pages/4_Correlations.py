@@ -5,10 +5,11 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from dashboard_data import apply_filters, build_sidebar_filters, load_context
+from dashboard_data import apply_filters, build_sidebar_filters, load_context, inject_custom_css, apply_premium_theme
 
 
 st.set_page_config(page_title="Correlations", page_icon="🔗", layout="wide")
+inject_custom_css()
 st.title("🔗 Correlations")
 
 ctx = load_context()
@@ -37,6 +38,7 @@ with col1:
             trendline="ols",
             title="TSS (today) vs HRV (next day)",
         )
+        fig = apply_premium_theme(fig, graph_type="scatter")
         st.plotly_chart(fig, use_container_width=True)
 
 with col2:
@@ -48,10 +50,12 @@ with col2:
             trendline="ols",
             title="TSS (today) vs Sleep Score (next day)",
         )
+        fig = apply_premium_theme(fig, graph_type="scatter")
         st.plotly_chart(fig, use_container_width=True)
 
 num_cols = [c for c in data.columns if pd.api.types.is_numeric_dtype(data[c])]
 if num_cols:
     corr = data[num_cols].corr(numeric_only=True)
     fig_corr = px.imshow(corr, title="Correlation Matrix", text_auto=".2f", aspect="auto")
+    fig_corr = apply_premium_theme(fig_corr, graph_type="other")
     st.plotly_chart(fig_corr, use_container_width=True)

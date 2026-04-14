@@ -3,10 +3,11 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from dashboard_data import load_context
+from dashboard_data import load_context, inject_custom_css, apply_premium_theme
 
 
 st.set_page_config(page_title="Data Quality", page_icon="🧪", layout="wide")
+inject_custom_css()
 st.title("🧪 Data Quality")
 
 ctx = load_context()
