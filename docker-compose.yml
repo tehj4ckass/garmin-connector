@@ -3,6 +3,8 @@ services:
     build: .
     container_name: garmin-connector
     restart: unless-stopped
+    environment:
+      - TZ=Europe/Berlin
     volumes:
       # Persist JSON exports and OAuth tokens on host.
       - .:/app
@@ -12,6 +14,7 @@ services:
     restart: unless-stopped
     command: streamlit run dashboard/app.py --server.address=0.0.0.0 --server.port=8501
     environment:
+      - TZ=Europe/Berlin
       - DASHBOARD_DATA_DIR=/app
     volumes:
       - .:/app
