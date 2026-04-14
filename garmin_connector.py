@@ -5,7 +5,7 @@ import random
 import sys
 import logging
 import schedule
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from dotenv import load_dotenv
 from garminconnect import Garmin
 
@@ -114,6 +114,29 @@ def _apply_schedule_jitter() -> None:
         return
     print(f"⏱️ Schedule jitter: waiting {wait_seconds // 60}m {wait_seconds % 60}s before sync...")
     time.sleep(wait_seconds)
+
+
+def _print_schedule_summary() -> None:
+    """Print configured schedule and the next planned run."""
+    schedule_text = ", ".join(SCHEDULE_TIMES)
+    next_run = schedule.next_run()
+    if next_run is None:
+        print(f"📅 Next runs planned at: {schedule_text} (local time).")
+        print("⏭️ Next scheduled sync: not available yet.")
+        return
+
+    now = datetime.now()
+    remaining = next_run - now
+    if remaining.total_seconds() < 0:
+        remaining_text = "starting soon"
+    else:
+        remaining_total_seconds = int(remaining.total_seconds())
+        hours, rem = divmod(remaining_total_seconds, 3600)
+        minutes, seconds = divmod(rem, 60)
+        remaining_text = f"in {hours}h {minutes}m {seconds}s"
+
+    print(f"📅 Next runs planned at: {schedule_text} (local time).")
+    print(f"⏭️ Next scheduled sync: {next_run.strftime('%Y-%m-%d %H:%M:%S')} ({remaining_text}).")
 
 
 def _load_fitness_json_by_id() -> dict:
@@ -966,6 +989,8 @@ def job(force_run: bool = False):
             print("❌ Sync failed: Garmin login failed.")
     except Exception as e:
         print(f"❌ Unexpected error in job: {e}")
+    finally:
+        _print_schedule_summary()
 
 if __name__ == "__main__":
     print("🚀 Garmin AI Coach Container started!")
