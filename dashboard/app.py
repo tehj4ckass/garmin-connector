@@ -29,10 +29,14 @@ start_date, end_date, selected_types = filters
 fctx = apply_filters(ctx, start_date, end_date, selected_types)
 
 col1, col2, col3, col4 = st.columns(4)
-distance_sum = fctx.activities["distance_km"].sum(min_count=1) if "distance_km" in fctx.activities else None
-duration_sum = fctx.activities["duration_min"].sum(min_count=1) if "duration_min" in fctx.activities else None
-sleep_avg = fctx.days["sleep_hours"].mean() if "sleep_hours" in fctx.days else None
-recovery_avg = fctx.days["recovery_score"].mean() if "recovery_score" in fctx.days else None
+distance_sum = fctx.activities["distance_km"].sum() if not fctx.activities.empty and "distance_km" in fctx.activities else 0
+duration_sum = fctx.activities["duration_min"].sum() if not fctx.activities.empty and "duration_min" in fctx.activities else 0
+
+sleep_series = fctx.days["sleep_hours"].dropna() if "sleep_hours" in fctx.days else []
+sleep_avg = sleep_series.mean() if len(sleep_series) > 0 else 0
+
+recovery_series = fctx.days["recovery_score"].dropna() if "recovery_score" in fctx.days else []
+recovery_avg = recovery_series.mean() if len(recovery_series) > 0 else 0
 
 col1.metric("Activities", f"{len(fctx.activities)}")
 col2.metric("Distance (km)", f"{(distance_sum or 0):.1f}")
