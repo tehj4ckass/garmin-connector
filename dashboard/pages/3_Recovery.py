@@ -4,16 +4,23 @@ from pathlib import Path
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from dashboard_data import apply_filters, build_sidebar_filters, load_context, inject_custom_css, apply_premium_theme
+from dashboard_data import (
+    apply_filters, 
+    build_sidebar_filters, 
+    load_context, 
+    inject_custom_css, 
+    apply_premium_theme,
+    render_header
+)
 
 
-st.set_page_config(page_title="Recovery", page_icon="😴", layout="wide")
+st.set_page_config(page_title="Erholung", page_icon="😴", layout="wide")
 inject_custom_css()
-st.title("😴 Recovery")
+render_header("😴 Erholung & Schlaf", "Wie gut regeneriert sich dein Körper?")
 
 ctx = load_context()
 with st.sidebar:
-    st.header("Global Filters")
+    st.header("Filter")
 start_date, end_date, selected_types = build_sidebar_filters(ctx, key_prefix="recovery_")
 fctx = apply_filters(ctx, start_date, end_date, selected_types)
 

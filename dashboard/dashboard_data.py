@@ -220,7 +220,54 @@ def activity_types(ctx: DashboardContext) -> list[str]:
     return sorted(ctx.activities["activity_type"].dropna().astype(str).unique().tolist())
 
 
-from datetime import timedelta
+from datetime import datetime, timedelta
+
+def calculate_weekly_trend(df, column, date_col="date", agg="mean"):
+    """Calculates percentage change vs previous week."""
+    if df.empty or column not in df.columns:
+        return 0.0, 0.0
+    
+    # Sort by date
+    df = df.sort_values(date_col)
+    max_date = df[date_col].max()
+    
+    current_week_start = max_date - timedelta(days=6)
+    prev_week_start = max_date - timedelta(days=13)
+    
+    current_week_data = df[df[date_col] >= current_week_start]
+    prev_week_data = df[(df[date_col] >= prev_week_start) & (df[date_col] < current_week_start)]
+    
+    if current_week_data.empty:
+        return 0.0, 0.0
+
+    def _get_val(data):
+        if data.empty:
+            return 0.0
+        if agg == "mean":
+            return data[column].mean()
+        if agg == "sum":
+            return data[column].sum()
+        if agg == "count":
+            return data[column].nunique()
+        return 0.0
+    
+    curr_val = _get_val(current_week_data)
+    prev_val = _get_val(prev_week_data)
+    
+    if prev_val == 0 or pd.isna(prev_val) or pd.isna(curr_val):
+        return curr_val, 0.0
+        
+    delta_pct = ((curr_val - prev_val) / prev_val) * 100
+    return curr_val, delta_pct
+
+def render_header(title, subtitle=None):
+    """Renders a consistent premium header for all pages."""
+    st.markdown(f"""
+        <div style="margin-bottom: 2rem;">
+            <h1 style="color: #f8fafc; font-weight: 700; margin-bottom: 0.25rem;">{title}</h1>
+            {f'<p style="color: #94a3b8; font-size: 1.1rem;">{subtitle}</p>' if subtitle else ''}
+        </div>
+    """, unsafe_allow_html=True)
 
 def build_sidebar_filters(ctx: DashboardContext, *, key_prefix: str = ""):
     dates = all_dates(ctx)
@@ -285,52 +332,58 @@ def inject_custom_css():
 def apply_premium_theme(fig, graph_type="line"):
     """Applies modern dark-mode formatting to Plotly figures."""
     
-    # 1. Füge sichtbare Punkte ("markers") und die echten Zahlenwerte ("text") hinzu
+    # 1. Formatting traces
     if graph_type == "line":
         fig.update_traces(
-            mode="lines+markers+text",
-            texttemplate="%{y:.0f}",
-            textposition="top center",
-            marker=dict(size=8),
-            selector=dict(type="scatter", mode="lines") # Only target lines
+            mode="lines+markers",
+            line=dict(width=3, shape='spline'),
+            marker=dict(size=8, opacity=0.8),
+            connectgaps=True
         )
-        # Ensure we also hit default px.line which may lack explicit mode
-        for trace in fig.data:
-            if trace.type == 'scatter' and (trace.mode == 'lines' or trace.mode is None):
-                trace.mode = 'lines+markers+text'
-                trace.texttemplate = '%{y:.0f}'
-                trace.textposition = 'top center'
-                trace.marker.size = 8
-    
     elif graph_type == "bar":
         fig.update_traces(
-            texttemplate="%{y:.0f}",
-            textposition="outside",
-            selector=dict(type="bar")
+            marker_color="#00ccff",
+            marker_line_width=0,
+            opacity=0.8
         )
-    elif graph_type == "scatter":
+    elif graph_type == "pie":
         fig.update_traces(
-            mode="markers+text",
-            texttemplate="%{y:.0f}",
-            textposition="top center",
-            marker=dict(size=8),
-            selector=dict(type="scatter")
+            hole=0.4,
+            textinfo='percent+label',
+            marker=dict(colors=['#00ccff', '#10b981', '#f59e0b', '#6366f1', '#ec4899'])
         )
 
-    # 2. Übriges Design (Dark-Mode, Fonts...)
+    # 2. General Layout
     fig.update_layout(
         template="plotly_dark",
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(t=50, l=10, r=10, b=10),
-        font=dict(family="sans serif", size=12, color="#E2E8F0"),
+        font=dict(family="Inter, sans-serif", size=13, color="#E2E8F0"),
         hoverlabel=dict(
             bgcolor="#1E293B",
-            font_size=13,
-            font_family="sans serif"
+            font_size=14,
+            font_family="Inter, sans-serif",
+            bordercolor="rgba(255,255,255,0.1)"
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
         )
     )
-    # Refine grid visibility for sleeker look
-    fig.update_xaxes(showgrid=False, tickformat="%d.%m.")
-    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor="rgba(255,255,255,0.05)")
+    # Refine axes
+    fig.update_xaxes(
+        showgrid=False, 
+        tickformat="%d.%m.",
+        linecolor="rgba(255,255,255,0.1)"
+    )
+    fig.update_yaxes(
+        showgrid=True, 
+        gridwidth=1, 
+        gridcolor="rgba(255,255,255,0.05)",
+        linecolor="rgba(255,255,255,0.1)"
+    )
     return fig

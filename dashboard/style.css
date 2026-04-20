@@ -1,48 +1,113 @@
-/* Premium Dark Mode Overrides */
+/* Premium Dark Mode - Modern Garmin Aesthetics */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    --bg-dark: #0f172a;
+    --glass-bg: rgba(30, 41, 59, 0.7);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --accent-cyan: #00ccff;
+    --accent-green: #10b981;
+    --accent-orange: #f59e0b;
+    --text-main: #f8fafc;
+    --text-muted: #94a3b8;
+}
+
+/* Base resets for Streamlit */
+.main {
+    background-color: var(--bg-dark);
+    font-family: 'Inter', sans-serif !important;
+}
 
 /* Hide clutter */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header {visibility: hidden;}
 
+/* Glassmorphism Card Style */
+.stMarkdown div[data-testid="stMarkdownContainer"] p {
+    font-family: 'Inter', sans-serif;
+}
+
 /* Sleeker Metric Cards */
 div[data-testid="metric-container"] {
-    background-color: rgba(30, 41, 59, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 15px 20px;
-    border-radius: 12px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    background: var(--glass-bg);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--glass-border);
+    padding: 20px;
+    border-radius: 16px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 div[data-testid="metric-container"]:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
-    border-color: rgba(0, 204, 255, 0.3);
+    transform: translateY(-4px);
+    border-color: rgba(0, 204, 255, 0.4);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2);
 }
 
-/* Make Tabs look more like modern buttons */
+/* Metric Label & Value colors */
+div[data-testid="stMetricLabel"] {
+    color: var(--text-muted) !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.025em;
+    text-transform: uppercase;
+    font-size: 0.75rem !important;
+}
+
+div[data-testid="stMetricValue"] {
+    color: var(--text-main) !important;
+    font-weight: 700 !important;
+}
+
+/* Tabs Redesign */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 8px;
+    gap: 12px;
     background-color: transparent;
+    border-bottom: 1px solid var(--glass-border);
+    margin-bottom: 20px;
 }
 
 .stTabs [data-baseweb="tab"] {
-    height: 40px;
-    white-space: pre-wrap;
-    background-color: rgba(255, 255, 255, 0.05);
+    height: 48px;
+    background-color: transparent !important;
     border-radius: 8px 8px 0 0;
-    padding: 10px 20px;
+    padding: 0 24px;
+    color: var(--text-muted);
+    transition: all 0.2s;
 }
 
 .stTabs [aria-selected="true"] {
-    background-color: rgba(0, 204, 255, 0.1) !important;
-    border-bottom: 2px solid #00CCFF !important;
+    color: var(--accent-cyan) !important;
+    border-bottom: 2px solid var(--accent-cyan) !important;
 }
 
-/* Improve Expander Design */
-.streamlit-expanderHeader {
+/* Containers with Border (used for Activity Highlights) */
+div[data-testid="stVerticalBlock"] > div > div[style*="border"] {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border) !important;
+    border-radius: 16px !important;
+    padding: 24px !important;
+}
+
+/* Dataframe styling */
+div[data-testid="stDataFrame"] {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--glass-border);
+}
+
+/* Buttons */
+.stButton > button {
+    border-radius: 10px !important;
+    background-color: var(--accent-cyan) !important;
+    color: var(--bg-dark) !important;
     font-weight: 600 !important;
-    font-size: 1.05rem !important;
-    border-radius: 8px !important;
+    border: none !important;
+    padding: 0.5rem 2rem !important;
+    transition: opacity 0.2s;
+}
+
+.stButton > button:hover {
+    opacity: 0.9;
 }
