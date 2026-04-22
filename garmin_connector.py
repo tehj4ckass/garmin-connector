@@ -12,6 +12,7 @@ from garminconnect import Garmin
 
 # Google Drive Imports
 from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -39,6 +40,11 @@ FITNESS_SCHEMA_VERSION = 2
 INITIAL_SYNC_DAYS = int(os.getenv("INITIAL_SYNC_DAYS", 365)) # How many days to fetch if no file exists
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
+GOOGLE_TOKEN_FILE = os.path.join(BASE_DIR, "token.json")
+GOOGLE_CREDENTIALS_FILE = os.path.join(BASE_DIR, "credentials.json")
+GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv(
+    "GOOGLE_SERVICE_ACCOUNT_FILE", os.path.join(BASE_DIR, "service_account.json")
+)
 LOGIN_STATE_FILE = "garmin_login_state.json"
 MAX_LOGIN_ATTEMPTS_PER_DAY = int(os.getenv("MAX_LOGIN_ATTEMPTS_PER_DAY", "20"))
 SCHEDULE_TIMES = [t.strip() for t in os.getenv("SYNC_TIMES", "08:00,12:00,16:00,20:00").split(",") if t.strip()]
@@ -558,30 +564,46 @@ def fetch_and_save_health(client):
 
 # --- PART 2: GOOGLE DRIVE LOGIC ---
 def get_drive_service():
+    # Option A: Service Account — no token expiry, ideal for headless/Pi environments.
+    # Set up once: create service_account.json and share your Drive folder with the
+    # service account email. See README for instructions.
+    if os.path.exists(GOOGLE_SERVICE_ACCOUNT_FILE):
+        creds = service_account.Credentials.from_service_account_file(
+            GOOGLE_SERVICE_ACCOUNT_FILE, scopes=SCOPES
+        )
+        return build('drive', 'v3', credentials=creds)
+
+    # Option B: OAuth2 user credentials with automatic token refresh.
     creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    
-    # If no valid credentials exist, let the user log in.
+    if os.path.exists(GOOGLE_TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_FILE, SCOPES)
+
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
-            except Exception:
-                # Refresh failed (e.g. revoked)
+                with open(GOOGLE_TOKEN_FILE, 'w') as f:
+                    f.write(creds.to_json())
+                return build('drive', 'v3', credentials=creds)
+            except Exception as e:
+                logger.warning(f"⚠️ Google token refresh failed ({e}). Re-authentication required.")
                 creds = None
-        
+
         if not creds:
-            if not os.path.exists('credentials.json'):
-                logger.error("❌ 'credentials.json' not found! Please download it from the Google Cloud Console.")
-                return None
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-            
-        # Save credentials for the next run
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-            
+            logger.error(
+                "❌ Google Drive auth lost and cannot re-authenticate headlessly.\n"
+                "   Recommended fix: set up a Service Account (no tokens, no expiry):\n"
+                "     1. Google Cloud Console → IAM → Service Accounts → create account\n"
+                "     2. Download JSON key → save as service_account.json next to garmin_connector.py\n"
+                "     3. Share your Google Drive folder with the service account email\n"
+                "   Quick fix: regenerate token.json on a machine with a browser:\n"
+                "     python garmin_connector.py --auth-google"
+            )
+            return None
+
+        with open(GOOGLE_TOKEN_FILE, 'w') as f:
+            f.write(creds.to_json())
+
     return build('drive', 'v3', credentials=creds)
 
 def upload_to_drive(filename):
@@ -687,6 +709,20 @@ def job(force_run: bool = False):
         _print_schedule_summary()
 
 if __name__ == "__main__":
+    # One-shot Google Drive re-authentication (run this on a machine WITH a browser,
+    # then copy the generated token.json to the Pi/server).
+    if "--auth-google" in sys.argv[1:]:
+        if not os.path.exists(GOOGLE_CREDENTIALS_FILE):
+            print(f"❌ credentials.json not found at {GOOGLE_CREDENTIALS_FILE}")
+            sys.exit(1)
+        flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_FILE, SCOPES)
+        creds = flow.run_local_server(port=0)
+        with open(GOOGLE_TOKEN_FILE, 'w') as f:
+            f.write(creds.to_json())
+        print(f"✅ Google auth successful! token.json saved to {GOOGLE_TOKEN_FILE}")
+        print("   Copy this file to the Pi if you ran this on another machine.")
+        sys.exit(0)
+
     logger.info("🚀 Garmin AI Coach Container started!")
     run_now_arg = any(arg in ("--run-now", "--force-sync-now") for arg in sys.argv[1:])
     run_now_env = os.getenv("FORCE_SYNC_ON_START", "").strip().lower() in ("1", "true", "yes", "on")
