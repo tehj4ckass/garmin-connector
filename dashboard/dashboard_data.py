@@ -1,3 +1,4 @@
+import html
 import json
 import os
 from dataclasses import dataclass
@@ -262,10 +263,12 @@ def calculate_weekly_trend(df, column, date_col="date", agg="mean"):
 
 def render_header(title, subtitle=None):
     """Renders a consistent premium header for all pages."""
+    escaped_title = html.escape(title)
+    escaped_subtitle = html.escape(subtitle) if subtitle else None
     st.markdown(f"""
         <div style="margin-bottom: 2rem;">
-            <h1 style="color: #f8fafc; font-weight: 700; margin-bottom: 0.25rem;">{title}</h1>
-            {f'<p style="color: #94a3b8; font-size: 1.1rem;">{subtitle}</p>' if subtitle else ''}
+            <h1 style="color: #f8fafc; font-weight: 700; margin-bottom: 0.25rem;">{escaped_title}</h1>
+            {f'<p style="color: #94a3b8; font-size: 1.1rem;">{escaped_subtitle}</p>' if escaped_subtitle else ''}
         </div>
     """, unsafe_allow_html=True)
 
