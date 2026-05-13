@@ -127,34 +127,29 @@ def _daily_training_aggregation(df_activities: pd.DataFrame) -> pd.DataFrame:
     return daily
 
 
-def _recovery_score_row(row: pd.Series) -> float | None:
-    sleep_score = _safe_float(row.get("sleep_score"))
-    hrv = _safe_float(row.get("avg_hrv"))
-    stress = _safe_float(row.get("avg_stress"))
-    resting_hr = _safe_float(row.get("resting_hr"))
-
-    parts = []
-    if sleep_score is not None:
-        parts.append(max(0.0, min(100.0, sleep_score)) * 0.35)
-    if hrv is not None:
-        hrv_norm = max(0.0, min(100.0, hrv))
-        parts.append(hrv_norm * 0.25)
-    if stress is not None:
-        parts.append(max(0.0, min(100.0, 100 - stress)) * 0.20)
-    if resting_hr is not None:
-        rhr_norm = max(0.0, min(100.0, 100 - (resting_hr - 35) * 2))
-        parts.append(rhr_norm * 0.20)
-
-    if not parts:
-        return None
-    return round(sum(parts), 2)
-
-
 def _add_recovery_metrics(df_days: pd.DataFrame) -> pd.DataFrame:
     if df_days.empty:
         return df_days
     result = df_days.copy()
-    result["recovery_score"] = result.apply(_recovery_score_row, axis=1)
+
+    # Vectorized calculation of recovery score
+    series_parts = []
+    if "sleep_score" in result.columns:
+        series_parts.append(result["sleep_score"].clip(0, 100) * 0.35)
+    if "avg_hrv" in result.columns:
+        series_parts.append(result["avg_hrv"].clip(0, 100) * 0.25)
+    if "avg_stress" in result.columns:
+        series_parts.append((100 - result["avg_stress"]).clip(0, 100) * 0.20)
+    if "resting_hr" in result.columns:
+        series_parts.append((100 - (result["resting_hr"] - 35) * 2).clip(0, 100) * 0.20)
+
+    if series_parts:
+        # Use a temporary DataFrame to sum across columns, skipping NaNs.
+        # min_count=1 ensures that if all values in a row are NaN, the sum is NaN.
+        result["recovery_score"] = pd.concat(series_parts, axis=1).sum(axis=1, min_count=1).round(2)
+    else:
+        result["recovery_score"] = None
+
     result["recovery_7d"] = result["recovery_score"].rolling(7, min_periods=1).mean()
     return result
 
