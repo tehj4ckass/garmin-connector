@@ -58,13 +58,21 @@ with tab1:
     l_col, r_col = st.columns(2)
     with l_col:
         if not fctx.merged_daily.empty:
-            df_plot = fctx.merged_daily.rename(columns={
+            rename_map = {
                 "training_stress_score": "Belastung (TSS)",
-                "recovery_score": "Erholung"
-            })
-            fig = px.line(df_plot, x="date", y=["Belastung (TSS)", "Erholung"], title="Belastung vs. Erholung")
+                "recovery_score": "Erholung",
+                "recovery_7d": "Erholung (7d Ø)",
+            }
+            plot_cols = [c for c in ["training_stress_score", "recovery_score", "recovery_7d"] if c in fctx.merged_daily.columns]
+            df_plot = fctx.merged_daily.rename(columns=rename_map)
+            fig = px.line(df_plot, x="date", y=[rename_map[c] for c in plot_cols], title="Belastung vs. Erholung")
             st.plotly_chart(apply_premium_theme(fig), use_container_width=True)
-            st.info("💡 **Insight**: Versuche, die Belastung zu steigern, wenn deine Erholung über 70 liegt.")
+            avg_recov = fctx.days["recovery_score"].mean() if not fctx.days.empty else 0
+            threshold = 70
+            if avg_recov >= threshold:
+                st.success(f"💡 Deine Ø Erholung liegt bei {avg_recov:.0f} — guter Zeitpunkt für intensive Einheiten.")
+            else:
+                st.warning(f"💡 Deine Ø Erholung liegt bei {avg_recov:.0f} — plane mehr Regeneration ein.")
             
     with r_col:
         if not fctx.days.empty:

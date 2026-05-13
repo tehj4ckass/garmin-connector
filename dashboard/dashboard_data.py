@@ -163,7 +163,7 @@ def _merged_daily(df_days: pd.DataFrame, df_daily_training: pd.DataFrame) -> pd.
     if df_days.empty and df_daily_training.empty:
         return pd.DataFrame()
 
-    days_cols = ["date", "recovery_score", "sleep_hours", "sleep_score", "avg_hrv", "resting_hr", "avg_stress"]
+    days_cols = ["date", "recovery_score", "recovery_7d", "sleep_hours", "sleep_score", "avg_hrv", "resting_hr", "avg_stress"]
     existing_days_cols = [c for c in days_cols if c in df_days.columns]
     train_cols = ["date", "activity_count", "distance_km", "duration_min", "training_stress_score"]
     existing_train_cols = [c for c in train_cols if c in df_daily_training.columns]

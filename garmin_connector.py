@@ -448,7 +448,7 @@ def fetch_and_save_activities(client):
     today = date.today()
 
     logger.info(f"📊 Delta check: {len(existing_fitness_json)} existing activities in JSON.")
-    logger.info(f"📅 Syncing activities from {start_date.isoformat()} until today ({today.isoformat()})...")
+    logger.info(f"📅 Syncing activities from {start_date.isoformat()} until today {today.isoformat()}...")
 
     try:
         logger.info("👤 Fetching athlete profile (VO2, zones, demographics)...")
@@ -514,7 +514,7 @@ def fetch_and_save_health(client):
     days_to_fetch = (today - start_date).days + 1
 
     logger.info(f"📊 Delta check: {len(existing_health_json)} days of health data already stored.")
-    logger.info(f"📅 Fetching health data for {days_to_fetch} days (from {start_date.isoformat()} to {today.isoformat()})...")
+    logger.info(f"📅 Fetching health data from {start_date.isoformat()} until today {today.isoformat()}...")
 
     delay = 0.5 if days_to_fetch > 30 else 0
     success_count = 0
