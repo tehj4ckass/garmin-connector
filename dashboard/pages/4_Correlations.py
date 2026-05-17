@@ -14,8 +14,7 @@ from dashboard_data import (
     render_header,
 )
 
-st.set_page_config(page_title="Zusammenhänge", page_icon="🔗", layout="wide")
-inject_custom_css()
+
 render_header("🔗 Zusammenhänge", "Wie beeinflussen Training und Erholung einander?")
 
 ctx = load_context()

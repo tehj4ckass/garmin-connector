@@ -15,8 +15,7 @@ from dashboard_data import (
     render_header
 )
 
-st.set_page_config(page_title="Garmin Dashboard: Übersicht", page_icon="📈", layout="wide")
-inject_custom_css()
+
 
 try:
     ctx = load_context()
@@ -43,11 +42,11 @@ tss_val, tss_delta = calculate_weekly_trend(fctx.daily_training, "training_stres
 sleep_val, sleep_delta = calculate_weekly_trend(fctx.days, "sleep_hours", agg="mean")
 recov_val, recov_delta = calculate_weekly_trend(fctx.days, "recovery_score", agg="mean")
 
-m1.metric("Aktivitäten", f"{len(fctx.activities)}", delta=f"{act_delta:.1f}%")
-m2.metric("Gesamt-Distanz", f"{(fctx.daily_training['distance_km'].sum() if not fctx.daily_training.empty else 0):.1f} km", delta=f"{dist_delta:.1f}%")
-m3.metric("Trainingslast", f"{(fctx.daily_training['training_stress_score'].sum() if not fctx.daily_training.empty else 0):.0f} TSS", delta=f"{tss_delta:.1f}%")
-m4.metric("Ø Schlaf", f"{(fctx.days['sleep_hours'].mean() if not fctx.days.empty else 0):.1f} h", delta=f"{sleep_delta:.1f}%")
-m5.metric("Ø Erholung", f"{(fctx.days['recovery_score'].mean() if not fctx.days.empty else 0):.1f}", delta=f"{recov_delta:.1f}%")
+m1.metric("Aktivitäten (7d)", f"{act_count:.0f}", delta=f"{act_delta:.1f}%")
+m2.metric("Distanz (7d)", f"{dist_val:.1f} km", delta=f"{dist_delta:.1f}%")
+m3.metric("Trainingslast (7d)", f"{tss_val:.0f} TSS", delta=f"{tss_delta:.1f}%")
+m4.metric("Ø Schlaf (7d)", f"{sleep_val:.1f} h", delta=f"{sleep_delta:.1f}%")
+m5.metric("Ø Erholung (7d)", f"{recov_val:.1f}", delta=f"{recov_delta:.1f}%")
 
 st.divider()
 

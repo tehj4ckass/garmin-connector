@@ -15,8 +15,7 @@ from dashboard_data import (
     render_header
 )
 
-st.set_page_config(page_title="Erholung", page_icon="😴", layout="wide")
-inject_custom_css()
+
 render_header("😴 Erholung & Schlaf", "Wie gut regeneriert sich dein Körper?")
 
 ctx = load_context()
@@ -38,10 +37,10 @@ hrv_val, hrv_delta = calculate_weekly_trend(fctx.days, "avg_hrv", agg="mean")
 rhr_val, rhr_delta = calculate_weekly_trend(fctx.days, "resting_hr", agg="mean")
 recov_val, recov_delta = calculate_weekly_trend(fctx.days, "recovery_score", agg="mean")
 
-col1.metric("Ø Schlaf", f"{sleep_val:.1f} h", delta=f"{sleep_delta:.1f}%")
-col2.metric("Ø HRV", f"{hrv_val:.1f}", delta=f"{hrv_delta:.1f}%")
-col3.metric("Ø Ruhe-HF", f"{rhr_val:.1f} bpm", delta=f"{-rhr_delta:.1f}%", delta_color="inverse")
-col4.metric("Ø Erholung", f"{recov_val:.1f}", delta=f"{recov_delta:.1f}%")
+col1.metric("Ø Schlaf (7d)", f"{sleep_val:.1f} h", delta=f"{sleep_delta:.1f}%")
+col2.metric("Ø HRV (7d)", f"{hrv_val:.1f}", delta=f"{hrv_delta:.1f}%")
+col3.metric("Ø Ruhe-HF (7d)", f"{rhr_val:.1f} bpm", delta=f"{-rhr_delta:.1f}%", delta_color="inverse")
+col4.metric("Ø Erholung (7d)", f"{recov_val:.1f}", delta=f"{recov_delta:.1f}%")
 
 st.divider()
 

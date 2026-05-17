@@ -15,8 +15,7 @@ from dashboard_data import (
     render_header
 )
 
-st.set_page_config(page_title="Aktivitäts-Details", page_icon="🔍", layout="wide")
-inject_custom_css()
+
 
 ctx = load_context()
 render_header("🔍 Aktivitäts-Details", "Detaillierte Analyse einzelner Einheiten.")

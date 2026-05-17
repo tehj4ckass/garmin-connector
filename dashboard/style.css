@@ -21,7 +21,7 @@
 /* Hide clutter */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
-header {visibility: hidden;}
+/* header {visibility: hidden;} */
 
 /* Glassmorphism Card Style */
 .stMarkdown div[data-testid="stMarkdownContainer"] p {

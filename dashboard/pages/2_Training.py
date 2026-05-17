@@ -15,8 +15,7 @@ from dashboard_data import (
     render_header
 )
 
-st.set_page_config(page_title="Training", page_icon="🏃", layout="wide")
-inject_custom_css()
+
 render_header("🏃 Training", "Analyse deiner sportlichen Aktivitäten.")
 
 ctx = load_context()
@@ -38,14 +37,10 @@ dist_val, dist_delta = calculate_weekly_trend(fctx.daily_training, "distance_km"
 tss_val, tss_delta = calculate_weekly_trend(fctx.daily_training, "training_stress_score", agg="sum")
 dur_val, dur_delta = calculate_weekly_trend(fctx.daily_training, "duration_min", agg="sum")
 
-total_dist = fctx.daily_training["distance_km"].sum() if not fctx.daily_training.empty else 0
-total_tss = fctx.daily_training["training_stress_score"].sum() if not fctx.daily_training.empty else 0
-total_dur_h = fctx.daily_training["duration_min"].sum() / 60 if not fctx.daily_training.empty else 0
-
-col1.metric("Aktivitäten", f"{len(fctx.activities)}", delta=f"{act_delta:.1f}%")
-col2.metric("Gesamt-Distanz", f"{total_dist:.1f} km", delta=f"{dist_delta:.1f}%")
-col3.metric("Trainingslast (TSS)", f"{total_tss:.0f}", delta=f"{tss_delta:.1f}%")
-col4.metric("Trainingszeit", f"{total_dur_h:.1f} h", delta=f"{dur_delta:.1f}%")
+col1.metric("Aktivitäten (7d)", f"{act_val:.0f}", delta=f"{act_delta:.1f}%")
+col2.metric("Distanz (7d)", f"{dist_val:.1f} km", delta=f"{dist_delta:.1f}%")
+col3.metric("Trainingslast (7d)", f"{tss_val:.0f} TSS", delta=f"{tss_delta:.1f}%")
+col4.metric("Trainingszeit (7d)", f"{dur_val / 60:.1f} h", delta=f"{dur_delta:.1f}%")
 
 st.divider()
 
