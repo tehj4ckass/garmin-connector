@@ -47,7 +47,7 @@ GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv(
 )
 LOGIN_STATE_FILE = "garmin_login_state.json"
 MAX_LOGIN_ATTEMPTS_PER_DAY = int(os.getenv("MAX_LOGIN_ATTEMPTS_PER_DAY", "20"))
-SCHEDULE_TIMES = [t.strip() for t in os.getenv("SYNC_TIMES", "08:00,12:00,16:00,20:00").split(",") if t.strip()]
+SCHEDULE_TIMES = [t.strip() for t in os.getenv("SYNC_TIMES", "06:00,08:00,10:00,12:00,14:00,16:00,18:00,20:00,22:00").split(",") if t.strip()]
 SCHEDULE_JITTER_MAX_MIN = int(os.getenv("SCHEDULE_JITTER_MAX_MIN", "12"))
 
 # Reduce noisy traceback logs from transient auth checks in upstream library.
