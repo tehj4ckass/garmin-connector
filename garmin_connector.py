@@ -318,7 +318,7 @@ def init_garmin():
         except Exception as e:
             token_auth_failed_non_rate_limit = not _is_rate_limit_error(e)
             if _is_rate_limit_error(e):
-                logger.error(f"❌ Garmin rate-limited (429) even when using stored tokens: {str(e)[:200]}")
+                logger.error(f"❌ Garmin rate-limited (429) even when using stored tokens: {type(e).__name__}")
                 _apply_429_cooldown(login_state)
                 return None
             # Otherwise fall through to a real login attempt.
@@ -349,7 +349,7 @@ def init_garmin():
                 os.remove(token_json_path)
                 logger.info("♻️ Removed invalid Garmin token store before interactive login retry.")
             except Exception as e:
-                logger.warning(f"⚠️ Could not remove stale Garmin token store: {str(e)[:160]}")
+                logger.warning(f"⚠️ Could not remove stale Garmin token store: {type(e).__name__}")
 
     _record_login_attempt(login_state)
     if len(login_state.get("attempts", [])) > MAX_LOGIN_ATTEMPTS_PER_DAY:
@@ -370,7 +370,7 @@ def init_garmin():
         if _is_rate_limit_error(e):
             _apply_429_cooldown(login_state)
         suffix = " (tokens loaded but unusable)" if tokens_loaded else ""
-        logger.error(f"❌ Garmin Login failed{suffix} (will not retry): {str(e)[:200]}")
+        logger.error(f"❌ Garmin Login failed{suffix} (will not retry): {type(e).__name__}")
         return None
 
 
