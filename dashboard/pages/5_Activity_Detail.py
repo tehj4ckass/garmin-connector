@@ -30,13 +30,6 @@ if fctx.activities.empty:
     st.info("Keine Aktivitäten für die gewählten Filter gefunden.")
     st.stop()
 
-def _clean_value(value):
-    if hasattr(value, "item"):
-        value = value.item()
-    if isinstance(value, float) and math.isnan(value):
-        return None
-    return value
-
 df = fctx.activities.sort_values("date", ascending=False).copy()
 df["display_label"] = df.apply(
     lambda r: f"{r['date'].date()} | {r.get('activity_type', 'Unknown')} | {r.get('distance_km', 0):.2f} km",
