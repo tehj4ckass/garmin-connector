@@ -1,5 +1,4 @@
 from datetime import date
-import time
 
 def get_first(d: dict, keys: list[str]):
     """Erstes vorhandenes, nicht-None-Feld (Garmin nutzt wechselnde Key-Namen)."""
