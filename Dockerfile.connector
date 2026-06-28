@@ -1,0 +1,18 @@
+# Minimal Dockerfile for Garmin Connector (kein Dashboard-Overhead)
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Nur Connector-Dependencies (kein pandas, kein streamlit, kein plotly)
+RUN pip install --no-cache-dir \
+    garminconnect \
+    python-dotenv \
+    google-api-python-client \
+    google-auth-httplib2 \
+    google-auth-oauthlib \
+    schedule
+
+# Code kopieren (Parser wird vom Connector importiert)
+COPY garmin_connector.py garmin_parser.py requirements.txt ./
+
+CMD ["python", "-u", "garmin_connector.py"]
